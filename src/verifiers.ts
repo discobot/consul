@@ -105,12 +105,33 @@ export async function buildTaskContext(store: LaunchStore, task: TaskRecord): Pr
 	].join("\n");
 }
 
-export async function buildVerifierPrompt(store: LaunchStore, task: TaskRecord, gate: Gate): Promise<string> {
+export async function buildVerifierPrompt(
+	store: LaunchStore,
+	task: TaskRecord,
+	gate: Gate,
+	verifierName: string,
+): Promise<string> {
 	const sections = [
 		`You are serving on the council. Deliver your go / no-go verdict for the **${gate} gate** of the task below. Judge only the concern defined in your system prompt.`,
 		"",
 		await buildTaskContext(store, task),
 	];
+	const history = store
+		.loadVerdicts()
+		.filter((v) => v.gate === gate && v.verifier === verifierName)
+		.slice(-2);
+	if (history.length > 0) {
+		sections.push(
+			"",
+			"## Your review history on this gate",
+			...history.map(
+				(v) =>
+					`- ${v.at} @ hash ${v.hash}: ${v.verdict.toUpperCase()}${v.comments.length > 0 ? ` — ${v.comments.join(" • ").slice(0, 600)}` : ""}`,
+			),
+			`The full committee record is in .pi/council/tasks/${task.id}/verdicts.jsonl.`,
+			"Do not relitigate. If a prior verdict of your kind accepted an approach, or the artifact was reshaped to satisfy your kind's earlier demand, do not demand its reversal unless it causes a material defect now. A reasoned rebuttal recorded in the design resolves a prior comment; judge whether material defects remain, not whether you would have designed it differently.",
+		);
+	}
 	if (gate === "implementation") {
 		const diff = await store.implementationDiff();
 		if (Buffer.byteLength(diff, "utf8") <= INLINE_DIFF_CAP_BYTES) {

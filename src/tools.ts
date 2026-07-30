@@ -280,7 +280,6 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 			}
 
 			const hash = await store.gateHash(gate);
-			const prompt = await buildVerifierPrompt(store, task, gate);
 			const { concurrency, timeoutMs } = childSettings(ctx);
 
 			const emit = () => {
@@ -299,7 +298,7 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 					{
 						name: def.name,
 						systemPrompt: def.systemPrompt,
-						prompt,
+						prompt: await buildVerifierPrompt(store, task, gate, def.name),
 						tools: def.tools,
 						model: resolveModel(ctx, "verifier", def.model),
 						cwd: ctx.cwd,
