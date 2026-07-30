@@ -8,8 +8,8 @@ them.
 
 ## The process (enforced by tools — you cannot skip gates)
 
-1. **Task intake.** The user's first message is the task. Immediately call `task_set` with
-   the verbatim statement and the requirements you derive from it. Derive requirements
+1. **Task intake.** The user's first message is captured as the task. Immediately call
+   `task_set` to finalize it with the verbatim statement and requirements you derive. Derive requirements
    explicitly and completely: everything the statement demands, stated as checkable items.
 2. **Design.** Investigate the repo (dispatch parallel research workers via
    `dispatch_workers` for anything sizable), then write the design with `design_write`. The
@@ -54,4 +54,5 @@ them.
 - Never modify the task statement or reword recorded requirements.
 - Never advance work past an unheld gate "because it's obviously fine".
 - Never mark work complete yourself — only `task_complete` decides.
-- Never treat a mid-task user message as casual chat: it is a requirement append or a kill.
+- Never treat a mid-task user message as casual chat: it is a requirement append or a kill
+  (`/task-kill` is the canonical user command; `/task kill` is an alias).

@@ -15,7 +15,8 @@ The dedicated launcher starts pi with the extension and the council TUI skin
 (branded header with the live task, committee working indicator) preloaded:
 
 ```bash
-council/bin/council            # uses `pi` from PATH
+council/bin/council            # Owner session; uses `pi` from PATH
+council/bin/council board      # separate disk-driven cockpit + supervised RPC Owner
 COUNCIL_PI=/path/to/pi/dist/cli.js council/bin/council
 ```
 
@@ -36,18 +37,24 @@ Then, in a git repository with at least one commit:
   derives requirements, designs, sources the design gate, implements, sources the
   implementation gate, and completes.
 - **Later messages append requirements** (or ask to kill). You cannot reword the task —
-  kill it with `/task kill` and start over.
+  kill it with `/task-kill` (`/task kill` remains an alias) and start over.
 - **Watch progress** in the status widget above the editor, or with `/task` for the full
-  report (requirements, per-verifier gate states, blocking comments). All task state is
-  plain files under `.pi/council/tasks/<id>/`.
+  report (requirements, per-verifier gate states, blocking comments, and spend), or run
+  `council board` for the dedicated cockpit. The board reads disk state, supervises an RPC
+  Owner, and sends append/kill actions through that Owner—it never edits task files.
+  State is plain files under `.pi/council/tasks/<id>/`, including verdict, activity,
+  status, and spend projections.
 
 ## The verifier panel
 
-`clean-code`, `interfaces`, `user-local-pov`, `user-global-pov`, `design-consistency`,
+`clean-code`, `interfaces`, `user-local-pov`, `user-global-pov`, `design`,
 `task-completeness` (both gates), plus `ux-bugs` and `github-clarity` (implementation
-gate). Each query runs the verifier afresh — its system prompt, the repo status, and the
-task are all it ever sees. Definitions live in [`verifiers/`](verifiers/); a project can
-override or extend them in `.pi/council/verifiers/*.md` (matched by `name`).
+gate). Each query runs the verifier afresh with its system prompt, repo/task context, and a
+bounded history of its own prior verdicts (never other agents' negotiation). Shipped definitions live in
+[`prompts/agents/verifiers/`](prompts/agents/verifiers/); a project can
+override or extend them in `.pi/council/verifiers/*.md` (matched by `name`). Perception
+verifiers may set `browser: true` to use available Playwright/Chromium rendering via `bash`;
+they fall back to code inspection when browser tooling is unavailable.
 
 ## Configuration
 
@@ -58,10 +65,20 @@ override or extend them in `.pi/council/verifiers/*.md` (matched by `name`).
 	"model": "provider/model-for-all-spawned-agents",
 	"verifierModel": "override-for-verifiers",
 	"workerModel": "override-for-workers",
+	"verifierModels": { "clean-code": "provider/specialized-model" },
 	"concurrency": 8,
-	"timeoutMinutes": 20
+	"timeoutMinutes": 20,
+	"inactivityMinutes": 3
 }
 ```
+
+`timeoutMinutes` is the absolute child runtime cap. `inactivityMinutes` (default 3, valid
+0.1–120) terminates a child that emits no JSONL events; sleep/wake clock jumps also fail
+in-flight children so missing verdicts can be re-sourced after resume.
+
+Verifier model precedence is frontmatter, named `verifierModels`, `verifierModel`, shared
+`model`, then the session model. Worker entry overrides precede `workerModel` and shared
+fallbacks. All shipped agent prompts are discoverable under `prompts/agents/`.
 
 Without a config, spawned agents use the main session's model. `COUNCIL_PI` can
 point at a specific pi entry (binary or cli.js) for spawned children; by default the

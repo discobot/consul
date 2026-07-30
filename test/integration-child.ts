@@ -34,12 +34,13 @@ store.writeDesign(
 
 const verifier = discoverVerifiers(dir).find((v) => v.name === "task-completeness");
 if (!verifier) throw new Error("task-completeness verifier not found");
-const prompt = await buildVerifierPrompt(store, task, "design");
+const prompt = await buildVerifierPrompt(store, task, "design", verifier.name, verifier.fingerprint, verifier.browser);
 
 console.log(`spawning ${verifier.name} (${model}) in ${dir} ...`);
 const started = Date.now();
 const result = await runChild(
 	{
+		kind: "verifier",
 		name: verifier.name,
 		systemPrompt: verifier.systemPrompt,
 		prompt,
@@ -47,6 +48,7 @@ const result = await runChild(
 		model,
 		cwd: dir,
 		timeoutMs: 10 * 60 * 1000,
+		inactivityMs: 3 * 60 * 1000,
 	},
 	undefined,
 	(p) => console.log(`  [progress] turn ${p.turns + 1}: ${p.lastActivity}`),

@@ -5,7 +5,6 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 const OUTPUT_CAP_BYTES = 50 * 1024;
@@ -16,10 +15,14 @@ export interface ChildSpec {
 	systemPrompt: string;
 	prompt: string;
 	tools: string[];
+	/** Verifiers get a replacement prompt and complete resource isolation. */
+	kind?: "worker" | "verifier";
 	/** "provider/model" passed to `pi --model`. */
 	model: string;
 	cwd: string;
 	timeoutMs: number;
+	/** No parsed JSONL event for this long terminates the child. */
+	inactivityMs?: number;
 }
 
 export interface ChildProgress {
@@ -38,6 +41,7 @@ export interface ChildResult {
 	exitCode: number;
 	turns: number;
 	costUsd: number;
+	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
 /** Re-invoke the same pi that is running us (works for dev checkouts, npm installs,
@@ -61,6 +65,18 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 	return { command: "pi", args };
 }
 
+export function watchdogFailure(
+	now: number,
+	lastEventAt: number,
+	lastCheckAt: number,
+	inactivityMs: number,
+	checkIntervalMs: number,
+): string | undefined {
+	if (now - lastCheckAt > checkIntervalMs + 30_000) return "system sleep/wake detected";
+	if (now - lastEventAt >= inactivityMs) return "inactivity watchdog expired";
+	return undefined;
+}
+
 function capBytes(text: string, maxBytes: number): string {
 	if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
 	let cut = text.slice(0, maxBytes);
@@ -73,22 +89,23 @@ export async function runChild(
 	signal: AbortSignal | undefined,
 	onProgress?: (progress: ChildProgress) => void,
 ): Promise<ChildResult> {
-	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "council-"));
-	const promptFile = path.join(tmpDir, "system-prompt.md");
-	await fs.promises.writeFile(promptFile, spec.systemPrompt, { encoding: "utf-8", mode: 0o600 });
-
+	const verifierArgs =
+		spec.kind === "verifier"
+			? ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files"]
+			: ["--no-extensions"];
 	const args = [
 		"--mode",
 		"json",
 		"-p",
 		"--no-session",
-		"-ne",
+		...verifierArgs,
 		"--model",
 		spec.model,
 		"--tools",
 		spec.tools.join(","),
-		"--append-system-prompt",
-		promptFile,
+		spec.kind === "verifier" ? "--system-prompt" : "--append-system-prompt",
+		spec.systemPrompt,
+		...(spec.kind === "verifier" ? ["--append-system-prompt", ""] : []),
 		spec.prompt,
 	];
 
@@ -99,12 +116,12 @@ export async function runChild(
 		exitCode: 0,
 		turns: 0,
 		costUsd: 0,
+		tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	};
 
 	const combinedSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(spec.timeoutMs)]) : AbortSignal.timeout(spec.timeoutMs);
 
-	try {
-		result.exitCode = await new Promise<number>((resolve) => {
+	result.exitCode = await new Promise<number>((resolve) => {
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: spec.cwd,
@@ -113,7 +130,29 @@ export async function runChild(
 			});
 			let buffer = "";
 			let stderr = "";
+			let closed = false;
+			let settled = false;
+			let killTimer: NodeJS.Timeout | undefined;
+			let watchdogTimer: NodeJS.Timeout | undefined;
+			let lastEventAt = Date.now();
+			let lastCheckAt = lastEventAt;
+			const inactivityMs = spec.inactivityMs ?? spec.timeoutMs;
+			const checkIntervalMs = Math.min(1000, Math.max(25, Math.floor(inactivityMs / 4)));
+			const abortChild = () => kill();
 
+			const finish = (code: number) => {
+				if (settled) return;
+				settled = true;
+				combinedSignal.removeEventListener("abort", abortChild);
+				if (killTimer) clearTimeout(killTimer);
+				if (watchdogTimer) clearInterval(watchdogTimer);
+				resolve(code);
+			};
+			const messageText = (message: any): string =>
+				(message?.content ?? [])
+					.filter((part: any) => part.type === "text")
+					.map((part: any) => part.text)
+					.join("\n");
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
 				let event: any;
@@ -122,19 +161,26 @@ export async function runChild(
 				} catch {
 					return;
 				}
+				lastEventAt = Date.now();
 				if (event.type === "tool_execution_start") {
 					onProgress?.({ name: spec.name, turns: result.turns, lastActivity: event.toolName });
+				}
+				if (event.type === "message_update" && event.message?.role === "assistant") {
+					const preview = messageText(event.message).replace(/[\r\n\t]+/g, " ").trim().slice(-80);
+					onProgress?.({
+						name: spec.name,
+						turns: result.turns,
+						lastActivity: preview ? `responding: ${preview}` : "responding",
+					});
 				}
 				if (event.type === "message_end" && event.message?.role === "assistant") {
 					const msg = event.message;
 					result.turns++;
 					result.costUsd += msg.usage?.cost?.total || 0;
+					for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) result.tokens[key] += msg.usage?.[key] || 0;
 					if (msg.stopReason) result.stopReason = msg.stopReason;
 					if (msg.errorMessage) result.errorMessage = msg.errorMessage;
-					const text = (msg.content ?? [])
-						.filter((part: any) => part.type === "text")
-						.map((part: any) => part.text)
-						.join("\n");
+					const text = messageText(msg);
 					if (text.trim()) result.output = text;
 					onProgress?.({ name: spec.name, turns: result.turns, lastActivity: "thinking" });
 				}
@@ -149,31 +195,42 @@ export async function runChild(
 			proc.stderr.on("data", (data) => {
 				stderr += data.toString();
 			});
-			proc.on("close", (code) => {
+			proc.on("close", (code, exitSignal) => {
+				closed = true;
 				if (buffer.trim()) processLine(buffer);
-				if (code !== 0 && !result.errorMessage) result.errorMessage = stderr.trim().slice(-2000) || `exit code ${code}`;
-				resolve(code ?? 0);
+				if ((code !== 0 || exitSignal) && !result.errorMessage) {
+					result.errorMessage =
+						stderr.trim().slice(-2000) || (exitSignal ? `terminated by ${exitSignal}` : `exit code ${code}`);
+				}
+				finish(code ?? (exitSignal ? 1 : 0));
 			});
 			proc.on("error", (err) => {
 				result.errorMessage = String(err);
-				resolve(1);
+				finish(1);
 			});
 
-			const kill = () => {
+			function kill(reason?: string) {
 				if (!result.errorMessage) {
-					result.errorMessage = combinedSignal.reason?.name === "TimeoutError" ? "timed out" : "aborted";
+					result.errorMessage = reason ?? (combinedSignal.reason?.name === "TimeoutError" ? "timed out" : "aborted");
 				}
 				proc.kill("SIGTERM");
-				setTimeout(() => {
-					if (!proc.killed) proc.kill("SIGKILL");
-				}, KILL_GRACE_MS).unref();
-			};
-			if (combinedSignal.aborted) kill();
-			else combinedSignal.addEventListener("abort", kill, { once: true });
-		});
-	} finally {
-		fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-	}
+				if (!killTimer) {
+					killTimer = setTimeout(() => {
+						if (!closed) proc.kill("SIGKILL");
+					}, KILL_GRACE_MS);
+					killTimer.unref();
+				}
+			}
+			watchdogTimer = setInterval(() => {
+				const now = Date.now();
+				const reason = watchdogFailure(now, lastEventAt, lastCheckAt, inactivityMs, checkIntervalMs);
+				lastCheckAt = now;
+				if (reason) kill(reason);
+			}, checkIntervalMs);
+			watchdogTimer.unref();
+			if (combinedSignal.aborted) abortChild();
+			else combinedSignal.addEventListener("abort", abortChild, { once: true });
+	});
 
 	result.output = capBytes(result.output, OUTPUT_CAP_BYTES);
 	result.ok =

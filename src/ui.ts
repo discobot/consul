@@ -1,16 +1,20 @@
 /**
  * User-visible status: a persistent widget above the editor, and the /task command
- * (full status report, or `/task kill` to archive the task and start over).
+ * (full status report, or `/task-kill` to archive the task and start over).
  */
 
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Markdown } from "@earendil-works/pi-tui";
-import { type Gate, type GateReport, storeFor, type TaskRecord } from "./state.ts";
+import { Markdown, truncateToWidth } from "@earendil-works/pi-tui";
+import { derivePhase, type Gate, type GateReport, storeFor } from "./state.ts";
 import { discoverVerifiers, verifiersForGate } from "./verifiers.ts";
 
 const WIDGET_KEY = "council";
 const REFRESH_THROTTLE_MS = 1000;
+
+export function compact(text: string, width: number): string {
+	return truncateToWidth(text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim(), width, "…");
+}
 
 /** Compact verifier labels for the one-line-per-gate widget. */
 const SHORT_LABELS: Record<string, string> = {
@@ -18,7 +22,7 @@ const SHORT_LABELS: Record<string, string> = {
 	interfaces: "iface",
 	"user-local-pov": "ulocal",
 	"user-global-pov": "uglobal",
-	"design-consistency": "design",
+	design: "design",
 	"ux-bugs": "ux",
 	"github-clarity": "github",
 	"task-completeness": "complete",
@@ -31,21 +35,16 @@ const STATE_ICONS: Record<string, { icon: string; color: string }> = {
 	pending: { icon: "○", color: "muted" },
 };
 
-function derivePhase(task: TaskRecord, hasDesign: boolean, design: GateReport, impl: GateReport): string {
-	if (task.status !== "active") return task.status;
-	if (!hasDesign) return "designing";
-	if (!design.holds) return "design gate";
-	if (!impl.holds) return "implementing";
-	return "gates hold — completing";
-}
-
-async function gateReports(ctx: ExtensionContext): Promise<{ design: GateReport; impl: GateReport }> {
-	const store = storeFor(ctx.cwd);
-	const all = discoverVerifiers(ctx.cwd);
-	const design = await store.gateReport("design", verifiersForGate(all, "design").map((v) => v.name));
+export async function gateReports(cwd: string): Promise<{ design: GateReport; impl: GateReport }> {
+	const store = storeFor(cwd);
+	const all = discoverVerifiers(cwd);
+	const designDefs = verifiersForGate(all, "design");
+	const implDefs = verifiersForGate(all, "implementation");
+	const design = await store.gateReport("design", designDefs.map((v) => v.name), new Map(designDefs.map((v) => [v.name, v.fingerprint])));
 	const impl = await store.gateReport(
 		"implementation",
-		verifiersForGate(all, "implementation").map((v) => v.name),
+		implDefs.map((v) => v.name),
+		new Map(implDefs.map((v) => [v.name, v.fingerprint])),
 	);
 	return { design, impl };
 }
@@ -67,25 +66,55 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 	let pending: ReturnType<typeof setTimeout> | undefined;
 
 	async function render(ctx: ExtensionContext): Promise<void> {
-		if (!ctx.hasUI) return;
-		const theme = ctx.ui.theme;
-		const task = storeFor(ctx.cwd).current();
+		const store = storeFor(ctx.cwd);
+		const task = store.current();
 		if (!task || task.status === "killed") {
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
 			ctx.ui.setStatus(WIDGET_KEY, undefined);
 			return;
 		}
-		const { design, impl } = await gateReports(ctx);
-		const phase = derivePhase(task, storeFor(ctx.cwd).readDesign() !== null, design, impl);
+		const { design, impl } = await gateReports(ctx.cwd);
 		const running = new Set(liveChildren.keys());
+		const liveGate: Gate | undefined = [...running].some((key) => key.startsWith("design:"))
+			? "design"
+			: [...running].some((key) => key.startsWith("implementation:"))
+				? "implementation"
+				: undefined;
+		const phase = derivePhase(task, store.readDesign() !== null, design, impl, {
+			["design"]: liveGate === "design",
+			["implementation"]: liveGate === "implementation",
+		});
+		const spend = store.spendTotals();
+		const projectGate = (report: GateReport) => ({
+			hash: report.hash,
+			holds: report.holds,
+			verifiers: report.verifiers.map((verifier) => ({
+				name: verifier.name,
+				fingerprint: verifier.verdict?.fingerprint ?? "",
+				state: running.has(`${report.gate}:${verifier.name}`) ? "reviewing" as const : verifier.state,
+				...(verifier.verdict?.comments.length ? { comments: verifier.verdict.comments } : {}),
+			})),
+		});
+		const blockers = [...design.verifiers, ...impl.verifiers]
+			.filter((verifier) => verifier.state === "no-go" || verifier.state === "stale")
+			.flatMap((verifier) => verifier.verdict?.comments.map((comment) => `${verifier.name}: ${comment}`) ?? []);
+		store.writeStatus({ taskId: task.id, phase, generatedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString(), pendingInputIds: task.pendingInputs?.map((input) => input.id) ?? [], blockers, spend, design: projectGate(design), implementation: projectGate(impl) });
+		if (!ctx.hasUI) return;
+		const theme = ctx.ui.theme;
 
-		const statement = task.statement.length > 46 ? `${task.statement.slice(0, 46)}…` : task.statement;
+		const statement = compact(task.statement, 46);
+		const count = task.requirements.length;
+		const pendingCount = task.pendingInputs?.length ?? 0;
 		const lines = [
 			theme.fg("accent", `◆ council #${task.id} `) +
 				theme.fg("warning", phase) +
-				theme.fg("muted", ` · ${task.requirements.length} reqs · ${statement}`),
+				theme.fg(
+					"muted",
+					` · ${count} ${count === 1 ? "requirement" : "requirements"}${pendingCount ? ` (+${pendingCount} new)` : ""} · ${statement}`,
+				),
 			gateLine(design, theme, running),
 			gateLine(impl, theme, running),
+			theme.fg("muted", `  spend $${spend.costUsd.toFixed(4)} · ${spend.tokens.total.toLocaleString()} tokens · ${spend.runs} runs`),
 		];
 		if (liveChildren.size > 0) {
 			const active = [...liveChildren.entries()].map(([name, s]) => `${name} ${s}`).join(" · ");
@@ -118,8 +147,16 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 		const store = storeFor(ctx.cwd);
 		const task = store.current();
 		if (!task) return "No task. Send a message to set one — the first message becomes the immutable task statement.";
-		const { design, impl } = await gateReports(ctx);
-		const phase = derivePhase(task, store.readDesign() !== null, design, impl);
+		const { design, impl } = await gateReports(ctx.cwd);
+		const liveGate: Gate | undefined = [...liveChildren.keys()].some((key) => key.startsWith("design:"))
+			? "design"
+			: [...liveChildren.keys()].some((key) => key.startsWith("implementation:"))
+				? "implementation"
+				: undefined;
+		const phase = derivePhase(task, store.readDesign() !== null, design, impl, {
+			["design"]: liveGate === "design",
+			["implementation"]: liveGate === "implementation",
+		});
 
 		const gateSection = (report: GateReport) => {
 			const rows = report.verifiers.map((v) => {
@@ -127,18 +164,23 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 				return `| ${v.name} | ${v.state} | ${when} |`;
 			});
 			const comments = report.verifiers
-				.filter((v) => v.state === "no-go" && v.verdict)
-				.flatMap((v) => v.verdict!.comments.map((c) => `- **${v.name}**: ${c}`));
+				.filter((v) => (v.state === "no-go" || v.state === "stale") && v.verdict)
+				.flatMap((v) =>
+					v.verdict!.comments.map(
+						(c) => `- **${v.name}**${v.state === "stale" ? " _(stale; retained for context)_" : ""}: ${c}`,
+					),
+				);
 			return [
 				`### ${report.gate} gate — ${report.holds ? "HOLDS ✓" : "not held"} (hash \`${report.hash}\`)`,
 				"",
 				"| verifier | state | last verdict |",
 				"|---|---|---|",
 				...rows,
-				...(comments.length > 0 ? ["", "Blocking comments:", ...comments] : []),
+				...(comments.length > 0 ? ["", "Current and stale review comments:", ...comments] : []),
 			].join("\n");
 		};
 
+		const spend = store.spendTotals();
 		return [
 			`## council — task #${task.id} · ${phase}`,
 			"",
@@ -146,8 +188,21 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 			`**Base**: ${task.baseBranch} @ ${task.baseCommit.slice(0, 8)} · created ${task.createdAt.slice(0, 16).replace("T", " ")}`,
 			...(task.summary ? [`**Outcome**: ${task.summary}`] : []),
 			"",
+			"**Legend**: ✓ go · ✗ no-go · ⚠ stale (artifact changed) · ○ pending · … reviewing",
+			`**Task spend**: $${spend.costUsd.toFixed(4)} · ${spend.tokens.total.toLocaleString()} tokens · ${spend.runs} runs (Owner ${spend.byKind.owner.runs}, workers ${spend.byKind.worker.runs}, verifiers ${spend.byKind.verifier.runs})`,
+			"",
 			"### Requirements",
 			...task.requirements.map((r, i) => `${i + 1}. ${r.text}`),
+			...(task.pendingInputs?.length
+				? [
+						"",
+						"### Pending user input",
+						...task.pendingInputs.map((input) => {
+							const attachments = input.attachments?.length ?? 0;
+							return `- \`${input.id}\`: ${compact(input.text, 100)}${attachments ? ` (${attachments} ${attachments === 1 ? "attachment" : "attachments"})` : ""} — waiting for the Owner to record this; no action needed`;
+						}),
+					]
+				: []),
 			"",
 			gateSection(design),
 			"",
@@ -156,7 +211,7 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 				? ["", "### Running now", ...[...liveChildren.entries()].map(([n, s]) => `- ${n}: ${s}`)]
 				: []),
 			"",
-			`_Task files: .pi/council/tasks/${task.id}/ · append requirements by sending a message · /task kill to abandon_`,
+			`_Task files: .pi/council/tasks/${task.id}/ · append requirements by sending a message · /task-kill to abandon_`,
 		].join("\n");
 	}
 
@@ -165,26 +220,33 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 		return new Markdown(text, 1, 1, getMarkdownTheme());
 	});
 
+	async function killTask(ctx: ExtensionContext): Promise<void> {
+		const store = storeFor(ctx.cwd);
+		const task = store.current();
+		if (!task || task.status !== "active") {
+			ctx.ui.notify("No active task to kill.", "info");
+			return;
+		}
+		const recordPath = `.pi/council/tasks/${task.id}/`;
+		const ok = await ctx.ui.confirm(
+			"Kill task?",
+			`Task #${task.id} is terminal once killed. Its record stays in ${recordPath}; your next message can set a new task.`,
+		);
+		if (!ok) return;
+		store.close("killed");
+		refresh(ctx);
+		ctx.ui.notify(`Task #${task.id} killed. Record: ${recordPath} Next: send a message to set a new task.`, "info");
+	}
+
+	pi.registerCommand("task-kill", {
+		description: "Kill the active council task and archive its record",
+		handler: async (_args, ctx) => killTask(ctx),
+	});
+
 	pi.registerCommand("task", {
-		description: "Show council task status, or `/task kill` to abandon the task",
+		description: "Show council task status (`/task kill` remains an alias for `/task-kill`)",
 		handler: async (args, ctx) => {
-			const store = storeFor(ctx.cwd);
-			if (args.trim() === "kill") {
-				const task = store.current();
-				if (!task || task.status !== "active") {
-					ctx.ui.notify("No active task to kill.", "info");
-					return;
-				}
-				const ok = await ctx.ui.confirm(
-					"Kill task?",
-					`Task #${task.id} will be archived (its files stay in .pi/council/tasks/${task.id}/). You can then set a new task.`,
-				);
-				if (!ok) return;
-				store.close("killed");
-				refresh(ctx);
-				ctx.ui.notify(`Task #${task.id} killed.`, "info");
-				return;
-			}
+			if (args.trim() === "kill") return killTask(ctx);
 			pi.sendMessage({
 				customType: "council-status",
 				content: await statusMarkdown(ctx),

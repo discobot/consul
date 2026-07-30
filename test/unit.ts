@@ -13,6 +13,10 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { LaunchStore, type Verdict } from "../src/state.ts";
 import { discoverVerifiers, parseFrontmatter, parseVerdict, verifiersForGate } from "../src/verifiers.ts";
+import "./children.test.ts";
+import "./cockpit.test.ts";
+import "./presentation.test.ts";
+import "./state.test.ts";
 
 function makeRepo(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "council-test-"));
@@ -84,7 +88,7 @@ test("gates: pending -> go -> holds; edits and appended requirements stale appro
 	assert.deepEqual(report.verifiers.map((v) => v.state), ["stale", "stale"]);
 });
 
-test("implementation hash tracks worktree changes but ignores .pi/council", async () => {
+test("implementation hash tracks committed changes and runtime state stays neutral", async () => {
 	const dir = makeRepo();
 	const store = new LaunchStore(dir);
 	await store.createTask("task", ["r"]);
@@ -95,18 +99,17 @@ test("implementation hash tracks worktree changes but ignores .pi/council", asyn
 	goVerdict(store, "implementation", "a", h1);
 	assert.equal(await store.implementationHash(), h1);
 
-	// tracked-file edit changes the hash
+	// uncommitted edits do not change the committed artifact, but block cleanliness
 	fs.appendFileSync(path.join(dir, "hello.txt"), "more\n");
+	assert.equal(await store.implementationHash(), h1);
+	assert.equal(await store.isWorktreeClean(), false);
+	execFileSync("git", ["add", "hello.txt"], { cwd: dir });
+	execFileSync("git", ["commit", "-qm", "change"], { cwd: dir });
 	const h2 = await store.implementationHash();
 	assert.notEqual(h1, h2);
 
-	// untracked files count too
-	fs.writeFileSync(path.join(dir, "new-file.txt"), "new\n");
-	const h3 = await store.implementationHash();
-	assert.notEqual(h2, h3);
-
 	// a no-go verdict never lets the gate hold
-	const bad: Verdict = { gate: "implementation", verifier: "a", verdict: "no-go", comments: ["x"], hash: h3, at: "now" };
+	const bad: Verdict = { gate: "implementation", verifier: "a", verdict: "no-go", comments: ["x"], hash: h2, at: "now" };
 	store.appendVerdict(bad);
 	const report = await store.gateReport("implementation", ["a"]);
 	assert.equal(report.holds, false);
@@ -146,7 +149,7 @@ test("verifier discovery: eight built-ins, project overrides win, gates respecte
 	const names = builtins.map((v) => v.name).sort();
 	assert.deepEqual(names, [
 		"clean-code",
-		"design-consistency",
+		"design",
 		"github-clarity",
 		"interfaces",
 		"task-completeness",

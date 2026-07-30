@@ -8,12 +8,16 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { constants as osConstants } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const extensionArgs = ["-e", path.join(root, "index.ts"), "-e", path.join(root, "src", "tui-skin.ts")];
-const passThrough = process.argv.slice(2);
+const boardMode = process.argv[2] === "board";
+const extensionArgs = boardMode
+	? ["-e", path.join(root, "src", "cockpit.ts")]
+	: ["-e", path.join(root, "index.ts"), "-e", path.join(root, "src", "tui-skin.ts")];
+const passThrough = process.argv.slice(boardMode ? 3 : 2);
 
 const override = process.env.COUNCIL_PI;
 const invocation = override
@@ -24,14 +28,23 @@ const invocation = override
 
 const result = spawnSync(invocation.command, [...invocation.args, ...extensionArgs, ...passThrough], {
 	stdio: "inherit",
+	env: boardMode ? { ...process.env, COUNCIL_OWNER_ARGS: JSON.stringify(passThrough) } : process.env,
 });
 
 if (result.error) {
-	const hint =
+	const target = [invocation.command, ...invocation.args].join(" ");
+	const recovery =
 		override === undefined
-			? "Could not run `pi`. Install it (npm i -g @earendil-works/pi-coding-agent) or point COUNCIL_PI at a pi binary or cli.js."
-			: `Could not run COUNCIL_PI (${override}).`;
-	console.error(`council: ${hint}\n${result.error.message}`);
+			? "Install pi (npm i -g @earendil-works/pi-coding-agent), or set COUNCIL_PI to a pi binary or cli.js/cli.ts entry."
+			: "Check that COUNCIL_PI names an executable pi binary or a readable cli.js/cli.ts entry.";
+	console.error(`council: could not run ${JSON.stringify(target)}: ${result.error.message}\n${recovery}`);
 	process.exit(1);
 }
-process.exit(result.status ?? 0);
+
+if (result.signal) {
+	const signalNumber = osConstants.signals[result.signal];
+	const exitCode = signalNumber ? 128 + signalNumber : 1;
+	console.error(`council: pi target ${JSON.stringify(invocation.command)} terminated by ${result.signal}; exiting ${exitCode}.`);
+	process.exit(exitCode);
+}
+process.exit(result.status ?? 1);

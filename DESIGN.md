@@ -17,9 +17,9 @@ verdicts.
    workers for any work, sources verdicts, and reconciles every change. If the user appends
    a requirement, it is the Owner's job to propagate it — into requirements, into the
    design, into the implementation, and into re-sourced reviews.
-4. **Verifiers are transient and memoryless.** Every query starts a verifier afresh with
-   only: its own system prompt + repo status + the task (statement, requirements, and the
-   gate artifact). No accumulated context, no negotiation history — fresh eyes every time.
+4. **Verifiers are transient and fresh.** Every query starts a verifier afresh with its own
+   system prompt, repo status, task/gate artifact, and only a bounded history of that same
+   verifier's prior verdicts to prevent relitigation. It receives no other agent history.
 5. **Approvals are pinned to content, not to time.** A verdict records a hash of exactly
    what was reviewed. If the relevant content changes — including via an appended
    requirement — the approval is *stale* and the gate closes again. Re-sourcing is the
@@ -65,9 +65,10 @@ Each verifier is a markdown definition (frontmatter + system prompt). Built-in p
 
 Projects can add/override verifiers in `.pi/council/verifiers/*.md`.
 
-Each query, a verifier receives exactly: its system prompt + a context block (task
-statement, requirements, repo status, the gate artifact) + read-only tools to inspect the
-repo. It must answer with a structured verdict:
+Each query receives exactly its verifier prompt, task/gate context, repository status, and
+bounded same-verifier history. Tools are read-only by default. Perception verifiers may set
+`browser: true`, adding `bash` to drive available Playwright/Chromium rendering (screenshots,
+DOM, accessibility), with graceful fallback to code inspection. It answers with:
 
 ```json
 { "verdict": "go" | "no-go", "comments": ["..."] }
@@ -91,7 +92,8 @@ user may KILL at any time (task archived; start over)
 - **DESIGN_GATE**: Owner calls `request_verdicts(gate: "design")` — all panel verifiers run
   in parallel. Gate opens only when every applicable verifier's latest verdict is GO *and*
   fresh (artifact hash matches current). NO-GOs come back with comments; Owner revises and
-  re-sources (full panel re-run on changed design — verifiers are memoryless).
+  re-sources (full panel re-run after changed design; unchanged artifacts may re-source a
+  named subset). Verifiers are fresh except for bounded same-verifier history.
 - **IMPLEMENTING**: Owner implements on a work branch (workers in parallel where possible),
   keeps GitHub state clean (PR etc. — `github-clarity` will check).
 - **IMPL_GATE**: same mechanics; artifact is the diff against the task's base commit.
@@ -144,10 +146,13 @@ Everything lives in the repo at `.pi/council/`:
 .pi/council/
   current            # id of the active task
   tasks/<id>/
-    task.json        # statement, base commit, phase, timestamps
-    requirements.md  # append-only numbered list
+    task.json        # canonical statement, requirements, pending input, base/status/timestamps
+    requirements.md  # readable numbered projection (append-only through tools)
     design.md
-    verdicts.jsonl   # every verdict ever sourced: {gate, verifier, verdict, comments, hash, at}
+    verdicts.jsonl   # every verdict ever sourced
+    spend.jsonl      # Owner/worker/verifier tokens and USD
+    activity.json    # live child projection
+    status.json      # shared phase/gate/blocker/spend presentation snapshot
   verifiers/*.md     # project-level verifier overrides/additions
 ```
 
@@ -157,20 +162,30 @@ survives session restarts (`pi` resumes are safe — state is on disk, not in co
 ## Execution model
 
 - Workers and verifiers are spawned as `pi --mode json -p --no-session` subprocesses with
-  `--append-system-prompt`, restricted `--tools`, and explicit `--provider/--model`
-  (configurable in `.pi/council/config.json`; falls back to the main session's model).
+  replacement verifier `--system-prompt` (worker `--append-system-prompt`), restricted
+  `--tools`, and explicit `--provider/--model`
+  (configurable globally, by agent kind, and by named verifier in
+  `.pi/council/config.json`; verifier frontmatter wins). Shipped prompts are co-located in
+  `prompts/agents/`.
 - Fan-out uses a concurrency-limited pool (default 8) — a full 8-verifier panel is one
-  round-trip wall-clock-wise.
+  round-trip wall-clock-wise. A configurable inactivity watchdog (default 3 minutes) and
+  sleep/wake clock-jump detection terminate dead children; persisted verdicts make resume
+  idempotent and only missing/stale reviews need re-sourcing.
 - Every subprocess result streams into the tool-call renderer, so the user sees live
   per-verifier / per-worker progress inside the session, and the widget mirrors it.
 
 ## Launcher
 
 `bin/council` is the dedicated entry point: it starts pi with the extension plus a
-custom TUI skin (`src/tui-skin.ts`) — a branded header showing the active task, id, phase,
-and requirement count at all times, a council terminal title, and a
+custom TUI skin (`src/tui-skin.ts`) — a branded startup header plus the extension's
+persistent widget showing active task, id, phase, and requirement count, a council terminal title, and a
 committee-flavored working indicator. All arguments pass through to pi; the pi entry is
 resolved from `$COUNCIL_PI` or PATH.
+
+`bin/council board` starts a separate pi-tui cockpit process. It watches the persisted
+status/task/verdict/activity/spend contract, renders the full task board, and supervises a
+session-resuming RPC Owner. Append and kill controls go through Owner RPC; the cockpit does
+not mutate canonical task files.
 
 ## Self-verification (acceptance test for this project)
 

@@ -3,13 +3,42 @@
  * the context block children receive, and verdict parsing.
  */
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Gate, LaunchStore, TaskRecord, Verdict } from "./state.ts";
 
-const DEFAULT_VERIFIER_TOOLS = ["read", "grep", "find", "ls", "bash"];
+const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"] as const;
+const BROWSER_VERIFIERS = new Set(["design", "ux-bugs", "user-local-pov", "user-global-pov"]);
+const DEFAULT_VERIFIER_TOOLS = [...READ_ONLY_TOOLS];
 const INLINE_DIFF_CAP_BYTES = 60 * 1024;
+const AGENT_PROMPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "prompts", "agents");
+
+function loadAgentPrompt(name: string): string {
+	const file = path.join(AGENT_PROMPTS_DIR, name);
+	try {
+		const prompt = fs.readFileSync(file, "utf8").replace(/\r\n?/g, "\n").trim();
+		if (!prompt) throw new Error("prompt is empty");
+		return prompt;
+	} catch (err) {
+		throw new Error(`Cannot load agent prompt ${file}: ${String(err)}`);
+	}
+}
+
+/** Select one reusable markdown section, including its heading. */
+function promptSection(prompt: string, heading: string): string {
+	const marker = `## ${heading}`;
+	const start = prompt.indexOf(marker);
+	if (start < 0) throw new Error(`Agent prompt is missing section ${marker}`);
+	const next = prompt.indexOf("\n## ", start + marker.length);
+	return prompt.slice(start, next < 0 ? undefined : next).trim();
+}
+
+const VERDICT_PROTOCOL = loadAgentPrompt("verdict-protocol.md");
+const REVIEW_HISTORY_PROTOCOL = promptSection(VERDICT_PROTOCOL, "Review history protocol");
+const VERDICT_RESPONSE_PROTOCOL = promptSection(VERDICT_PROTOCOL, "Verdict response protocol");
+const BROWSER_GUIDANCE = loadAgentPrompt("browser-guidance.md");
 
 export interface VerifierDef {
 	name: string;
@@ -17,8 +46,11 @@ export interface VerifierDef {
 	gates: Gate[];
 	tools: string[];
 	model?: string;
+	browser: boolean;
 	systemPrompt: string;
 	source: "builtin" | "project";
+	/** Hash of the normalized, behavior-affecting definition fields. */
+	fingerprint: string;
 }
 
 /** Minimal frontmatter parser: `key: value` string pairs between `---` fences. */
@@ -34,41 +66,84 @@ export function parseFrontmatter(content: string): { frontmatter: Record<string,
 	return { frontmatter, body: content.slice(match[0].length) };
 }
 
+function normalizedFingerprint(def: Omit<VerifierDef, "fingerprint" | "source">): string {
+	const normalized = JSON.stringify({
+		name: def.name.trim(),
+		description: def.description.trim(),
+		gates: [...new Set(def.gates)].sort(),
+		tools: [...new Set(def.tools)].sort(),
+		model: def.model?.trim() || null,
+		browser: def.browser,
+		systemPrompt: def.systemPrompt.replace(/\r\n?/g, "\n").trim(),
+	});
+	return crypto.createHash("sha256").update(normalized).digest("hex");
+}
+
+export function verifierFingerprint(def: VerifierDef): string {
+	return normalizedFingerprint(def);
+}
+
 function loadVerifierDir(dir: string, source: "builtin" | "project"): VerifierDef[] {
 	let entries: string[];
 	try {
-		entries = fs.readdirSync(dir);
-	} catch {
-		return [];
+		entries = fs.readdirSync(dir).sort();
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw err;
 	}
 	const defs: VerifierDef[] = [];
 	for (const entry of entries) {
 		if (!entry.endsWith(".md")) continue;
+		const file = path.join(dir, entry);
 		let content: string;
 		try {
-			content = fs.readFileSync(path.join(dir, entry), "utf-8");
-		} catch {
-			continue;
+			content = fs.readFileSync(file, "utf-8");
+		} catch (err) {
+			throw new Error(`Cannot read verifier definition ${file}: ${String(err)}`);
 		}
 		const { frontmatter, body } = parseFrontmatter(content);
-		if (!frontmatter.name || !frontmatter.description) continue;
-		const gates = (frontmatter.gates ?? "design, implementation")
-			.split(",")
-			.map((g) => g.trim())
-			.filter((g): g is Gate => g === "design" || g === "implementation");
-		const tools = frontmatter.tools
-			?.split(",")
-			.map((t) => t.trim())
-			.filter(Boolean);
-		defs.push({
-			name: frontmatter.name,
-			description: frontmatter.description,
-			gates: gates.length > 0 ? gates : ["design", "implementation"],
-			tools: tools && tools.length > 0 ? tools : DEFAULT_VERIFIER_TOOLS,
-			model: frontmatter.model,
-			systemPrompt: body.trim(),
-			source,
-		});
+		const fail = (reason: string): never => {
+			throw new Error(`Invalid verifier definition ${file}: ${reason}`);
+		};
+		const name = frontmatter.name?.trim();
+		const description = frontmatter.description?.trim();
+		if (!name || !/^[a-z0-9][a-z0-9-]*$/.test(name)) fail("name must be a lowercase slug");
+		if (!description) fail("description is required");
+		const rawGates = (frontmatter.gates ?? "design, implementation").split(",").map((g) => g.trim());
+		if (rawGates.length === 0 || rawGates.some((g) => g !== "design" && g !== "implementation")) {
+			fail("gates must be a non-empty comma-separated subset of design, implementation");
+		}
+		const gates = [...new Set(rawGates)].sort() as Gate[];
+		const browser = frontmatter.browser === "true";
+		if (frontmatter.browser !== undefined && frontmatter.browser !== "true" && frontmatter.browser !== "false") {
+			fail("browser must be true or false");
+		}
+		if (browser && !BROWSER_VERIFIERS.has(name)) fail("browser capability is reserved for perception verifiers");
+		const allowedTools = browser ? [...READ_ONLY_TOOLS, "bash"] : [...READ_ONLY_TOOLS];
+		const defaults = browser ? allowedTools : DEFAULT_VERIFIER_TOOLS;
+		const rawTools = (frontmatter.tools ?? defaults.join(",")).split(",").map((tool) => tool.trim());
+		if (rawTools.length === 0 || rawTools.some((tool) => !allowedTools.includes(tool))) {
+			fail(`tools must be a non-empty subset of ${allowedTools.join(",")}`);
+		}
+		if (browser && !rawTools.includes("bash")) fail("browser capability requires bash");
+		const tools = [...new Set(rawTools)].sort();
+		const concernPrompt = body.replace(/\r\n?/g, "\n").trim();
+		if (!concernPrompt) fail("system prompt body is required");
+		// Shared behavior is part of the effective system prompt, and therefore its
+		// fingerprint. Changing council protocol correctly stales old approvals.
+		const systemPrompt = [concernPrompt, VERDICT_PROTOCOL, ...(browser ? [BROWSER_GUIDANCE] : [])].join("\n\n");
+		if (frontmatter.model !== undefined && !/^[^/\s]+\/[^/\s]+$/.test(frontmatter.model)) fail("model must be provider/model");
+		const normalized = {
+			name,
+			description,
+			gates,
+			tools,
+			...(frontmatter.model ? { model: frontmatter.model.trim() } : {}),
+			browser,
+			systemPrompt,
+		};
+		if (defs.some((def) => def.name === name)) fail(`duplicate verifier name ${name}`);
+		defs.push({ ...normalized, source, fingerprint: normalizedFingerprint(normalized) });
 	}
 	return defs;
 }
@@ -76,7 +151,7 @@ function loadVerifierDir(dir: string, source: "builtin" | "project"): VerifierDe
 /** Built-ins ship next to the extension; projects may override or extend any of them
  * by name in `.pi/council/verifiers/*.md`. */
 export function discoverVerifiers(cwd: string): VerifierDef[] {
-	const builtinDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "verifiers");
+	const builtinDir = path.join(AGENT_PROMPTS_DIR, "verifiers");
 	const projectDir = path.join(cwd, ".pi", "council", "verifiers");
 	const merged = new Map<string, VerifierDef>();
 	for (const def of loadVerifierDir(builtinDir, "builtin")) merged.set(def.name, def);
@@ -98,6 +173,12 @@ export async function buildTaskContext(store: LaunchStore, task: TaskRecord): Pr
 		"",
 		"## Requirements",
 		task.requirements.map((r, i) => `${i + 1}. ${r.text}`).join("\n"),
+		...(task.attachments?.length
+			? ["", "## Task attachments", ...task.attachments.map((attachment) => `- ${attachment.path}${attachment.mediaType ? ` (${attachment.mediaType})` : ""}`)]
+			: []),
+		...(task.pendingInputs?.length
+			? ["", "## Pending user input", ...task.pendingInputs.map((input) => `- ${input.id}: ${input.text}${input.attachments?.length ? ` [attachments: ${input.attachments.map((a) => a.path).join(", ")}]` : ""}`)]
+			: []),
 		"",
 		"## Repository status",
 		await store.repoStatus(),
@@ -110,6 +191,8 @@ export async function buildVerifierPrompt(
 	task: TaskRecord,
 	gate: Gate,
 	verifierName: string,
+	_definitionFingerprint?: string,
+	browser = false,
 ): Promise<string> {
 	const sections = [
 		`You are serving on the council. Deliver your go / no-go verdict for the **${gate} gate** of the task below. Judge only the concern defined in your system prompt.`,
@@ -129,8 +212,11 @@ export async function buildVerifierPrompt(
 					`- ${v.at} @ hash ${v.hash}: ${v.verdict.toUpperCase()}${v.comments.length > 0 ? ` — ${v.comments.join(" • ").slice(0, 600)}` : ""}`,
 			),
 			`The full committee record is in .pi/council/tasks/${task.id}/verdicts.jsonl.`,
-			"Do not relitigate. If a prior verdict of your kind accepted an approach, or the artifact was reshaped to satisfy your kind's earlier demand, do not demand its reversal unless it causes a material defect now. A reasoned rebuttal recorded in the design resolves a prior comment; judge whether material defects remain, not whether you would have designed it differently.",
+			REVIEW_HISTORY_PROTOCOL,
 		);
+	}
+	if (browser) {
+		sections.push("", BROWSER_GUIDANCE);
 	}
 	if (gate === "implementation") {
 		const diff = await store.implementationDiff();
@@ -144,16 +230,7 @@ export async function buildVerifierPrompt(
 			);
 		}
 	}
-	sections.push(
-		"",
-		"## Verdict protocol",
-		"Inspect the repository as needed with your tools. Then end your reply with exactly one fenced JSON block and nothing after it:",
-		"```json",
-		'{"verdict": "go", "comments": ["optional advisory notes"]}',
-		"```",
-		'or `{"verdict": "no-go", "comments": ["each blocking problem, concrete and actionable"]}`.',
-		"A no-go must carry at least one comment. An unparseable reply is treated as no-go.",
-	);
+	sections.push("", VERDICT_RESPONSE_PROTOCOL);
 	return sections.join("\n");
 }
 
@@ -164,12 +241,16 @@ export function parseVerdict(output: string): { verdict: "go" | "no-go"; comment
 	if (candidate) {
 		try {
 			const parsed = JSON.parse(candidate);
-			if (parsed.verdict === "go" || parsed.verdict === "no-go") {
-				const comments = Array.isArray(parsed.comments) ? parsed.comments.map(String) : [];
-				if (parsed.verdict === "no-go" && comments.length === 0) {
-					comments.push("(verifier gave no-go without comments)");
-				}
-				return { verdict: parsed.verdict, comments, parseError: false };
+			if (
+				parsed !== null &&
+				typeof parsed === "object" &&
+				Object.keys(parsed).sort().join(",") === "comments,verdict" &&
+				(parsed.verdict === "go" || parsed.verdict === "no-go") &&
+				Array.isArray(parsed.comments) &&
+				parsed.comments.every((comment: unknown) => typeof comment === "string" && comment.trim().length > 0) &&
+				(parsed.verdict === "go" || parsed.comments.length > 0)
+			) {
+				return { verdict: parsed.verdict, comments: parsed.comments, parseError: false };
 			}
 		} catch {
 			// fall through to the safe default
