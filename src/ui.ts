@@ -5,7 +5,8 @@
 
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Markdown, truncateToWidth } from "@earendil-works/pi-tui";
+import { Markdown, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { packCellRows } from "./presentation.ts";
 import { derivePhase, type Gate, type GateReport, storeFor } from "./state.ts";
 import { discoverVerifiers, verifiersForGate } from "./verifiers.ts";
 
@@ -24,6 +25,7 @@ const SHORT_LABELS: Record<string, string> = {
 	"user-global-pov": "uglobal",
 	design: "design",
 	"ux-bugs": "ux",
+	"visual-design": "vd",
 	"github-clarity": "github",
 	"task-completeness": "complete",
 };
@@ -49,16 +51,25 @@ export async function gateReports(cwd: string): Promise<{ design: GateReport; im
 	return { design, impl };
 }
 
-function gateLine(report: GateReport, theme: ExtensionContext["ui"]["theme"], running: Set<string>): string {
+function packWidgetCells(prefix: string, cells: string[], width: number): string[] {
+	width = Math.max(1, width);
+	const prefixWidth = visibleWidth(prefix);
+	const indent = " ".repeat(Math.min(prefixWidth, Math.max(0, width - 1)));
+	return packCellRows(prefixWidth, cells.map(visibleWidth), width).map((row, index) =>
+		truncateToWidth(`${index === 0 ? prefix : indent}${row.map((cellIndex) => cells[cellIndex]).join(" ")}`, width, "…"),
+	);
+}
+
+export function gateLines(report: GateReport, theme: ExtensionContext["ui"]["theme"], running: Set<string>, width: number): string[] {
 	const cells = report.verifiers.map((v) => {
 		const label = SHORT_LABELS[v.name] ?? v.name;
 		if (running.has(`${report.gate}:${v.name}`)) return theme.fg("accent", `${label}…`);
 		const { icon, color } = STATE_ICONS[v.state];
 		return theme.fg(color as any, `${label}${icon}`);
 	});
+	if (report.holds) cells.push(theme.fg("success", "HOLDS"));
 	const title = report.gate === "design" ? "design" : "impl  ";
-	const held = report.holds ? theme.fg("success", " HOLDS") : "";
-	return `  ${theme.fg("muted", title)} ${cells.join(" ")}${held}`;
+	return packWidgetCells(`  ${theme.fg("muted", title)} `, cells, width);
 }
 
 export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, string>) {
@@ -114,23 +125,27 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 		const statement = compact(task.statement, 46);
 		const count = task.requirements.length;
 		const pendingCount = task.pendingInputs?.length ?? 0;
-		const lines = [
-			theme.fg("accent", `◆ council #${task.id} `) +
+		const widgetLines = (width: number) => {
+			const header = theme.fg("accent", `◆ council #${task.id} `) +
 				theme.fg("warning", phase) +
-				theme.fg(
-					"muted",
-					` · ${count} ${count === 1 ? "requirement" : "requirements"}${pendingCount ? ` (+${pendingCount} new)` : ""} · ${statement}`,
-				),
-			gateLine(design, theme, running),
-			gateLine(impl, theme, running),
-			theme.fg("muted", `  spend $${spend.costUsd.toFixed(4)} · ${spend.tokens.total.toLocaleString()} tokens · ${spend.runs} runs`),
-		];
-		if (liveChildren.size > 0) {
-			const active = [...liveChildren.entries()].map(([name, s]) => `${name} ${s}`).join(" · ");
-			lines.push(theme.fg("dim", `  running ${active.length > 100 ? `${active.slice(0, 100)}…` : active}`));
-		}
-		if (task.status === "done") lines.splice(1); // header only once done
-		ctx.ui.setWidget(WIDGET_KEY, lines, { placement: "aboveEditor" });
+				theme.fg("muted", ` · ${count} ${count === 1 ? "requirement" : "requirements"}${pendingCount ? ` (+${pendingCount} new)` : ""} · ${statement}`);
+			const lines = [
+				truncateToWidth(header, width, "…"),
+				...gateLines(design, theme, running, width),
+				...gateLines(impl, theme, running, width),
+				...packWidgetCells(theme.fg("muted", "  spend "), [
+					theme.fg("muted", `$${spend.costUsd.toFixed(4)}`),
+					theme.fg("muted", `${spend.tokens.total.toLocaleString()} tokens`),
+					theme.fg("muted", `${spend.runs} runs`),
+				], width),
+			];
+			if (liveChildren.size > 0) {
+				const active = [...liveChildren.entries()].map(([name, s]) => `${name} ${s}`);
+				lines.push(...packWidgetCells(theme.fg("dim", "  running "), active.map((item) => theme.fg("dim", item)), width));
+			}
+			return lines;
+		};
+		ctx.ui.setWidget(WIDGET_KEY, () => ({ render: widgetLines, invalidate() {} }), { placement: "aboveEditor" });
 		ctx.ui.setStatus(WIDGET_KEY, theme.fg("accent", `◆ #${task.id} ${phase}`));
 	}
 
@@ -174,7 +189,7 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 		const gateSection = (report: GateReport) => {
 			const rows = report.verifiers.map((v) => {
 				const when = v.verdict ? v.verdict.at.slice(0, 16).replace("T", " ") : "—";
-				return `| ${v.name} | ${v.state} | ${when} |`;
+				return `- **${v.name}** — ${v.state} · last verdict ${when}`;
 			});
 			const comments = report.verifiers
 				.filter((v) => (v.state === "no-go" || v.state === "stale") && v.verdict)
@@ -186,8 +201,6 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 			return [
 				`### ${report.gate} gate — ${report.holds ? "HOLDS ✓" : "not held"} (hash \`${report.hash}\`)`,
 				"",
-				"| verifier | state | last verdict |",
-				"|---|---|---|",
 				...rows,
 				...(comments.length > 0 ? ["", "Current and stale review comments:", ...comments] : []),
 			].join("\n");

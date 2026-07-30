@@ -58,8 +58,9 @@ Each verifier is a markdown definition (frontmatter + system prompt). Built-in p
 | `interfaces` | Interfaces, APIs, data models: is every change there sensible and justified? |
 | `user-local-pov` | Each created/changed user-facing view in isolation: fresh-eyes clarity, sensible journey, a pleasure to follow |
 | `user-global-pov` | Changes across pages/views: do they play together sensibly? |
-| `design` | Consistency, brand adherence, clarity, simplicity of the design |
-| `ux-bugs` | Everything that should be readable / hearable / viewable is fully so |
+| `design` | Intended design and information design at both gates: consistency, brand adherence, clarity, simplicity, and implementation adherence |
+| `ux-bugs` | Everything that should be readable / hearable / viewable is fully so (implementation gate only) |
+| `visual-design` | Perceptual visual quality and consistency of rendered surfaces (implementation gate only) |
 | `github-clarity` | Is a PR created; are comments & checks addressed? (implementation gate only) |
 | `task-completeness` | Does the design address the task? Does the realization follow the design? |
 
@@ -68,7 +69,15 @@ Projects can add/override verifiers in `.pi/council/verifiers/*.md`.
 Each query receives exactly its verifier prompt, task/gate context, repository status, and
 bounded same-verifier history. Tools are read-only by default. Perception verifiers may set
 `browser: true`, adding `bash` to drive available Playwright/Chromium rendering (screenshots,
-DOM, accessibility), with graceful fallback to code inspection. It answers with:
+DOM, accessibility), with graceful fallback to code inspection. The browser-enabled
+`visual-design` verifier is deliberately stricter: it cannot approve from code alone. For
+TUI changes it renders and inspects actual output in a PTY at narrow, typical, and wide
+terminal widths, including rendered color; for web changes it uses the browser at
+representative viewports and states. It judges visual hierarchy, spacing/alignment/rhythm,
+rendered color and contrast, typographic consistency, and cross-surface visual consistency.
+An unavailable relevant rendering path is a blocker. This implementation-only perceptual
+role is distinct from `design`, which continues to assess intended and information design
+at both gates and implementation adherence to that intent. It answers with:
 
 ```json
 { "verdict": "go" | "no-go", "comments": ["..."] }
@@ -134,9 +143,15 @@ state, workers, verdict comments), `/task-kill` (archive and reset).
 Status is also always visible in a persistent TUI widget:
 
 ```
-▌ council  #a3f1  IMPLEMENTING          3 requirements (+1 new)
-▌ design ✓✓✓✓✓✓✓✓   impl ✓✗⏳○○○⚠✓    workers: 2 running
+◆ council #a3f1 IMPLEMENTING · 3 requirements (+1 new) · task summary
+  design code✓ design✓ iface✓ complete✓ uglobal✓ ulocal✓ HOLDS
+  impl   code✓ design✓ github✓ iface✓ complete✓ uglobal✓ ulocal✓ ux✓ vd…
+  spend  $0.0420 12,300 tokens 9 runs
+  running visual-design rendering cockpit
 ```
+
+Gate cells wrap with a hanging indent at narrow widths; `vd` is the compact
+`visual-design` label and `…` marks an actively reviewing verifier.
 
 ## Persistence
 
@@ -167,8 +182,8 @@ survives session restarts (`pi` resumes are safe — state is on disk, not in co
   (configurable globally, by agent kind, and by named verifier in
   `.pi/council/config.json`; verifier frontmatter wins). Shipped prompts are co-located in
   `prompts/agents/`.
-- Fan-out uses a concurrency-limited pool (default 8) — a full 8-verifier panel is one
-  round-trip wall-clock-wise. A configurable inactivity watchdog (default 3 minutes) and
+- Fan-out uses a concurrency-limited pool (default 9) — a full 9-verifier implementation
+  panel is one round-trip wall-clock-wise. A configurable inactivity watchdog (default 3 minutes) and
   sleep/wake clock-jump detection terminate dead children; persisted verdicts make resume
   idempotent and only missing/stale reviews need re-sourcing.
 - Every subprocess result streams into the tool-call renderer, so the user sees live

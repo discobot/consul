@@ -1,11 +1,12 @@
 # Verification
 
-Completed on `council/design-compliance-audit`:
+Completed on `council/visual-design-verifier`:
 
-- `node --test test/unit.ts` — **32 passed, 0 failed** after implementation-review fixes.
+- `node --test test/unit.ts` — **34 passed, 0 failed**.
 - `node --check` for `index.ts`, `src/*.ts`, `test/*.ts`, and `bin/council` — passed.
-- Owner extension load through a real pi RPC process — passed.
-- `bin/council --version` and `bin/council board --version` with the configured pi entry — passed.
-- `git diff --check` and clean-worktree check — passed before implementation review.
+- Canonical and legacy `visual-design.md` verifier definitions are byte-identical.
+- Owner extension load through a real pi RPC process with the nine-verifier panel — passed.
+- Real `script(1)` PTY inspection at 32, 80, and 120 columns — widget, `/task`, and cockpit passed for hierarchy, spacing/alignment/rhythm, rendered color/contrast, typography, and cross-surface consistency.
+- `git diff --check` — passed.
 
-No Git remote is configured, so PR/remote CI state is unavailable; the dedicated branch, committed diff, local checks, and this record are the local review equivalent.
+No Git remote is configured, so PR/remote CI state is unavailable; the dedicated branch, committed diff, local checks, rendered-surface inspection, and this record are the local review equivalent.

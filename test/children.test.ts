@@ -120,7 +120,7 @@ test("verifier definitions are read-only, validated, and fingerprinted", () => {
 	fs.rmSync(path.join(dir, ".pi"), { recursive: true, force: true });
 	const defs = discoverVerifiers(dir);
 	assert.ok(defs.filter((def) => !def.browser).every((def) => def.tools.every((tool) => ["read", "grep", "find", "ls"].includes(tool))));
-	for (const name of ["design", "ux-bugs", "user-local-pov", "user-global-pov"]) {
+	for (const name of ["design", "ux-bugs", "user-local-pov", "user-global-pov", "visual-design"]) {
 		const def = defs.find((item) => item.name === name)!;
 		assert.equal(def.browser, true);
 		assert.ok(def.tools.includes("bash"));

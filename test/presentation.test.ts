@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
+import { packCellRows } from "../src/presentation.ts";
 
 const launcher = path.resolve("bin/council");
 
@@ -12,6 +13,18 @@ function fakePi(dir: string, body: string): string {
 	fs.writeFileSync(file, body);
 	return file;
 }
+
+test("widget cells preserve hanging alignment at narrow, typical, and wide widths", () => {
+	const labels = ["code○", "design○", "github○", "iface○", "complete○", "uglobal○", "ulocal○", "ux○", "vd○"];
+	for (const width of [32, 80, 120]) {
+		const rows = packCellRows(9, labels.map((label) => label.length), width);
+		assert.deepEqual(rows.flat().map((index) => labels[index]), labels);
+		for (const row of rows) {
+			const contentWidth = row.reduce((sum, index) => sum + labels[index].length, 0) + Math.max(0, row.length - 1);
+			assert.ok(9 + contentWidth <= width, `row fits ${width} columns`);
+		}
+	}
+});
 
 test("launcher passes arguments and preserves normal exit status", () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "council-launcher-"));

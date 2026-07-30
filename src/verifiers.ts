@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import type { Gate, LaunchStore, TaskRecord, Verdict } from "./state.ts";
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"] as const;
-const BROWSER_VERIFIERS = new Set(["design", "ux-bugs", "user-local-pov", "user-global-pov"]);
+const BROWSER_VERIFIERS = new Set(["design", "ux-bugs", "user-local-pov", "user-global-pov", "visual-design"]);
 const DEFAULT_VERIFIER_TOOLS = [...READ_ONLY_TOOLS];
 const INLINE_DIFF_CAP_BYTES = 60 * 1024;
 const AGENT_PROMPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "prompts", "agents");

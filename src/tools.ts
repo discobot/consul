@@ -24,7 +24,7 @@ import {
 	verifiersForGate,
 } from "./verifiers.ts";
 
-const DEFAULT_CONCURRENCY = 8;
+const DEFAULT_CONCURRENCY = 9;
 const DEFAULT_TIMEOUT_MINUTES = 20;
 const DEFAULT_INACTIVITY_MINUTES = 3;
 const DEFAULT_WORKER_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];

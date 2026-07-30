@@ -144,7 +144,7 @@ test("parseVerdict: fenced, bare, and garbage", () => {
 	assert.equal(nogoNoComments.comments.length, 1);
 });
 
-test("verifier discovery: eight built-ins, project overrides win, gates respected", () => {
+test("verifier discovery: nine built-ins, project overrides win, gates respected", () => {
 	const dir = makeRepo();
 	const builtins = discoverVerifiers(dir);
 	const names = builtins.map((v) => v.name).sort();
@@ -157,10 +157,43 @@ test("verifier discovery: eight built-ins, project overrides win, gates respecte
 		"user-global-pov",
 		"user-local-pov",
 		"ux-bugs",
+		"visual-design",
 	]);
-	assert.equal(verifiersForGate(builtins, "design").length, 6); // ux-bugs + github-clarity are impl-only
-	assert.equal(verifiersForGate(builtins, "implementation").length, 8);
+	assert.equal(verifiersForGate(builtins, "design").length, 6); // three verifiers are implementation-only
+	assert.equal(verifiersForGate(builtins, "implementation").length, 9);
 	for (const v of builtins) assert.ok(v.systemPrompt.length > 100, `${v.name} has a real system prompt`);
+
+	const visual = builtins.find((v) => v.name === "visual-design")!;
+	assert.deepEqual(visual.gates, ["implementation"]);
+	assert.equal(visual.browser, true);
+	assert.ok(visual.tools.includes("bash"));
+	const prompt = visual.systemPrompt.toLowerCase();
+	assert.match(prompt, /render/);
+	assert.match(prompt, /code alone|code-only/);
+	assert.match(prompt, /pty|pseudo-terminal/);
+	assert.match(prompt, /several[^.\n]*width|narrow[^.\n]*typical[^.\n]*wide/);
+	assert.match(prompt, /browser/);
+	assert.match(prompt, /unavailable/);
+	assert.match(prompt, /blocking/);
+	assert.match(prompt, /visual hierarchy/);
+	assert.match(prompt, /spacing/);
+	assert.match(prompt, /alignment/);
+	assert.match(prompt, /rhythm/);
+	assert.match(prompt, /color/);
+	assert.match(prompt, /contrast/);
+	assert.match(prompt, /typograph/);
+	assert.match(prompt, /cross-surface|between surfaces|across surfaces/);
+	assert.match(prompt, /design[^.\n]*(intended design|information design)|intended design[^.\n]*design verifier/);
+
+	const design = builtins.find((v) => v.name === "design")!;
+	assert.deepEqual(design.gates, ["design", "implementation"]);
+	assert.match(design.systemPrompt.toLowerCase(), /intended\s+design/);
+	assert.match(design.systemPrompt.toLowerCase(), /information design/);
+	assert.match(design.systemPrompt.toLowerCase(), /visual-design/);
+
+	const canonical = fs.readFileSync(path.resolve("prompts/agents/verifiers/visual-design.md"), "utf8");
+	const compatibility = fs.readFileSync(path.resolve("verifiers/visual-design.md"), "utf8");
+	assert.equal(compatibility, canonical);
 
 	const overrideDir = path.join(dir, ".pi", "council", "verifiers");
 	fs.mkdirSync(overrideDir, { recursive: true });
@@ -168,11 +201,27 @@ test("verifier discovery: eight built-ins, project overrides win, gates respecte
 		path.join(overrideDir, "clean-code.md"),
 		"---\nname: clean-code\ndescription: custom\ngates: design\n---\nCustom prompt body.",
 	);
+	fs.writeFileSync(
+		path.join(overrideDir, "visual-design.md"),
+		"---\nname: visual-design\ndescription: custom visual review\ngates: implementation\nbrowser: true\n---\nRender and review the surface.",
+	);
 	const merged = discoverVerifiers(dir);
 	const custom = merged.find((v) => v.name === "clean-code")!;
 	assert.equal(custom.source, "project");
 	assert.deepEqual(custom.gates, ["design"]);
-	assert.equal(merged.length, 8);
+	const customVisual = merged.find((v) => v.name === "visual-design")!;
+	assert.equal(customVisual.source, "project");
+	assert.equal(customVisual.browser, true);
+	assert.ok(customVisual.tools.includes("bash"));
+	assert.deepEqual(customVisual.gates, ["implementation"]);
+	assert.equal(merged.length, 9);
+});
+
+test("visual-design uses the compact vd label and the panel-sized concurrency default", () => {
+	const toolsSource = fs.readFileSync(path.resolve("src/tools.ts"), "utf8");
+	const uiSource = fs.readFileSync(path.resolve("src/ui.ts"), "utf8");
+	assert.match(toolsSource, /const DEFAULT_CONCURRENCY = 9;/);
+	assert.match(uiSource, /"visual-design": "vd"/);
 });
 
 test("parseFrontmatter handles fences and no-frontmatter", () => {

@@ -48,14 +48,21 @@ Then, in a git repository with at least one commit:
 
 ## The verifier panel
 
-`clean-code`, `interfaces`, `user-local-pov`, `user-global-pov`, `design`,
-`task-completeness` (both gates), plus `ux-bugs` and `github-clarity` (implementation
-gate). Each query runs the verifier afresh with its system prompt, repo/task context, and a
-bounded history of its own prior verdicts (never other agents' negotiation). Shipped definitions live in
+The nine built-ins are `clean-code`, `interfaces`, `user-local-pov`, `user-global-pov`,
+`design`, and `task-completeness` (both gates), plus `ux-bugs`, `visual-design`, and
+`github-clarity` (implementation gate only). `design` reviews intended design and
+information design at both gates, including implementation adherence; `visual-design`
+separately reviews the perceptual quality and consistency of the rendered implementation.
+Each query runs the verifier afresh with its system prompt, repo/task context, and a bounded
+history of its own prior verdicts (never other agents' negotiation). Shipped definitions live in
 [`prompts/agents/verifiers/`](prompts/agents/verifiers/); a project can
 override or extend them in `.pi/council/verifiers/*.md` (matched by `name`). Perception
 verifiers may set `browser: true` to use available Playwright/Chromium rendering via `bash`;
-they fall back to code inspection when browser tooling is unavailable.
+they fall back to code inspection when browser tooling is unavailable. The implementation-only
+`visual-design` verifier has a stricter rendered-surface contract: it must inspect TUI work
+in a real PTY at narrow, typical, and wide terminal widths, and must use the browser for web
+work at representative viewports and states. If a relevant renderer is unavailable, it
+blocks rather than approving from code alone.
 
 ## Configuration
 
@@ -67,14 +74,15 @@ they fall back to code inspection when browser tooling is unavailable.
 	"verifierModel": "provider/default-verifier-model",
 	"workerModel": "provider/default-worker-model",
 	"verifierModels": { "clean-code": "provider/specialized-model" },
-	"concurrency": 8,
+	"concurrency": 9,
 	"timeoutMinutes": 20,
 	"inactivityMinutes": 3
 }
 ```
 
-`timeoutMinutes` is the absolute child runtime cap. `inactivityMinutes` (default 3, valid
-0.1–120) terminates a child that emits no JSONL events; sleep/wake clock jumps also fail
+`concurrency` defaults to 9, allowing the full built-in implementation panel to run in one
+parallel round. `timeoutMinutes` is the absolute child runtime cap. `inactivityMinutes`
+(default 3, valid 0.1–120) terminates a child that emits no JSONL events; sleep/wake clock jumps also fail
 in-flight children so missing verdicts can be re-sourced after resume.
 
 Verifier model precedence is frontmatter, named `verifierModels`, `verifierModel`, shared
