@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { LaunchStore, type StatusGate } from "./state.ts";
 
 export type BoardState = "GO" | "NO-GO" | "stale" | "pending" | "reviewing";
 
@@ -44,28 +45,6 @@ function object(value: unknown): JsonObject | undefined {
 	return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
 }
 
-function readText(file: string, errors: string[], required = false): string | undefined {
-	try {
-		return fs.readFileSync(file, "utf8");
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT" || required) errors.push(`${path.basename(file)}: ${(error as Error).message}`);
-		return undefined;
-	}
-}
-
-function readJson(file: string, errors: string[]): JsonObject | undefined {
-	const raw = readText(file, errors);
-	if (raw === undefined) return undefined;
-	try {
-		const value = object(JSON.parse(raw));
-		if (!value) throw new Error("expected an object");
-		return value;
-	} catch (error) {
-		errors.push(`${path.basename(file)}: ${(error as Error).message}`);
-		return undefined;
-	}
-}
-
 /** Reads complete JSONL records and deliberately ignores a torn final record. */
 export function parseJsonl(raw: string): JsonObject[] {
 	const lines = raw.split("\n");
@@ -83,11 +62,6 @@ export function parseJsonl(raw: string): JsonObject[] {
 	return result;
 }
 
-function records(file: string, errors: string[]): JsonObject[] {
-	const raw = readText(file, errors);
-	return raw === undefined ? [] : parseJsonl(raw);
-}
-
 function stateName(value: unknown): BoardState {
 	const normalized = String(value ?? "pending").toLowerCase();
 	if (normalized === "go") return "GO";
@@ -96,105 +70,37 @@ function stateName(value: unknown): BoardState {
 	return "pending";
 }
 
-function comments(value: unknown): string[] {
-	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function gateRows(status: JsonObject | undefined, gate: "design" | "implementation", verdicts: JsonObject[]): BoardVerifier[] {
-	const gates = object(status?.gates);
-	const source = object(gates?.[gate]) ?? object(status?.[gate]);
-	const listed = Array.isArray(source?.verifiers) ? source.verifiers : Array.isArray(status?.[`${gate}Verifiers`]) ? status?.[`${gate}Verifiers`] : [];
-	if (listed.length) {
-		return listed.flatMap((item) => {
-			const row = typeof item === "string" ? { name: item } : object(item);
-			if (!row || typeof row.name !== "string") return [];
-			const verdict = object(row.verdict);
-			return [{ name: row.name, state: stateName(row.state), comments: comments(row.comments ?? verdict?.comments) }];
-		});
-	}
-	const latest = new Map<string, JsonObject>();
-	for (const verdict of verdicts) if (verdict.gate === gate && typeof verdict.verifier === "string") latest.set(verdict.verifier, verdict);
-	return [...latest].map(([name, verdict]) => ({ name, state: stateName(verdict.verdict), comments: comments(verdict.comments) }));
-}
-
-function childRows(activity: JsonObject | undefined): BoardChild[] {
-	const value = activity?.children ?? activity?.running;
-	if (Array.isArray(value)) return value.flatMap((item) => {
-		const row = object(item);
-		return row && typeof row.name === "string" ? [{ name: row.name, status: String(row.status ?? row.state ?? "running") }] : [];
-	});
-	const map = object(value) ?? activity;
-	if (!map) return [];
-	return Object.entries(map).flatMap(([name, value]) => {
-		if (["updatedAt", "heartbeatAt", "generation"].includes(name)) return [];
-		const row = object(value);
-		return [{ name, status: String(row?.status ?? row?.state ?? value ?? "running") }];
-	});
-}
-
-function tokenTotal(value: JsonObject | undefined): number {
-	if (!value) return 0;
-	const explicit = Number(value.total ?? value.totalTokens);
-	if (Number.isFinite(explicit)) return explicit;
-	return ["input", "output", "cacheRead", "cacheWrite"].reduce((sum, key) => sum + (Number(value[key]) || 0), 0);
-}
-
-function spendTotal(entries: JsonObject[], summary?: JsonObject): BoardSnapshot["spend"] {
-	if (summary) {
-		const totals = object(summary.total) ?? object(summary.totals) ?? summary;
-		const cost = Number(totals.cost ?? totals.costUsd ?? 0);
-		const tokens = typeof totals.tokens === "number" ? totals.tokens : tokenTotal(object(totals.tokens));
-		if (Number.isFinite(cost) && Number.isFinite(tokens) && (cost || tokens)) return { cost, tokens, entries: Number(totals.entries ?? totals.runs ?? entries.length) };
-	}
-	let cost = 0;
-	let tokens = 0;
-	for (const entry of entries) {
-		const usage = object(entry.usage);
-		const costs = object(usage?.cost) ?? object(entry.cost);
-		cost += Number(entry.costUsd ?? costs?.total ?? entry.cost ?? 0) || 0;
-		tokens += Number(entry.totalTokens ?? usage?.totalTokens ?? usage?.total) || tokenTotal(object(entry.tokens)) || tokenTotal(usage);
-	}
-	return { cost, tokens, entries: entries.length };
-}
-
-/** Pure disk projection used by both the TUI and tests. It never writes council state. */
+/** Canonical disk projection. Freshness is consumed only from engine-written status.json. */
 export function loadCockpitSnapshot(cwd: string, now = Date.now()): BoardSnapshot {
-	const root = path.join(cwd, ".pi", "council");
 	const errors: string[] = [];
-	const id = (readText(path.join(root, "current"), errors) ?? "").trim();
-	if (!id) return { statement: "No active task", requirements: [], phase: "IDLE", gates: { design: [], implementation: [] }, blockers: [], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: false, errors };
-	const dir = path.join(root, "tasks", id);
-	const task = readJson(path.join(dir, "task.json"), errors);
-	const status = readJson(path.join(dir, "status.json"), errors) ?? readJson(path.join(root, "status.json"), errors);
-	const activity = readJson(path.join(dir, "activity.json"), errors) ?? readJson(path.join(root, "activity.json"), errors);
-	const verdicts = records(path.join(dir, "verdicts.jsonl"), errors);
-	const taskSpend = records(path.join(dir, "spend.jsonl"), errors);
-	const spendEntries = taskSpend.length ? taskSpend : records(path.join(root, "spend.jsonl"), errors);
-	const spendSummary = readJson(path.join(dir, "spend.json"), errors) ?? readJson(path.join(root, "spend.json"), errors);
-	const requirements = Array.isArray(task?.requirements) ? task.requirements.flatMap((item) => {
-		const requirement = object(item);
-		return typeof item === "string" ? [item] : requirement && typeof requirement.text === "string" ? [requirement.text] : [];
-	}) : [];
-	const heartbeat = String(status?.heartbeatAt ?? status?.updatedAt ?? status?.generatedAt ?? "");
-	const heartbeatTime = Date.parse(heartbeat);
-	const connected = Number.isFinite(heartbeatTime) && now - heartbeatTime <= STATUS_STALE_MS;
-	const design = readText(path.join(dir, "design.md"), errors) ?? "";
-	const blockers = Array.isArray(status?.blockers) ? status.blockers.filter((item): item is string => typeof item === "string") : [];
-	const gates = { design: gateRows(status, "design", verdicts), implementation: gateRows(status, "implementation", verdicts) };
-	return {
-		taskId: id,
-		statement: typeof task?.statement === "string" ? task.statement : "Task state unavailable",
-		requirements,
-		phase: String(status?.phase ?? task?.status ?? "UNKNOWN").toUpperCase(),
-		gates,
-		blockers,
-		children: childRows(activity),
-		spend: spendTotal(spendEntries, object(status?.spend) ?? spendSummary),
-		design,
-		connected,
-		updatedAt: heartbeat || undefined,
-		errors,
-	};
+	try {
+		const store = new LaunchStore(cwd);
+		const task = store.latest();
+		if (!task) return { statement: "No active task — send a task through the Owner first", requirements: [], phase: "IDLE", gates: { design: [], implementation: [] }, blockers: [], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: true, errors };
+		const status = store.readStatus();
+		const activity = store.readActivity();
+		const totals = store.spendTotals();
+		const heartbeat = status?.heartbeatAt;
+		const connected = task.status !== "active" || Boolean(heartbeat && now - Date.parse(heartbeat) <= STATUS_STALE_MS);
+		const rows = (gate?: StatusGate): BoardVerifier[] => gate?.verifiers.map((verifier) => ({ name: verifier.name, state: stateName(verifier.state), comments: verifier.comments ?? [] })) ?? [];
+		return {
+			taskId: task.id,
+			statement: task.statement,
+			requirements: task.requirements.map((requirement) => requirement.text),
+			phase: status?.phase ?? (task.status === "done" ? "DONE" : task.status === "killed" ? "KILLED" : "UNKNOWN"),
+			gates: { design: rows(status?.design), implementation: rows(status?.implementation) },
+			blockers: status?.blockers ?? (task.status === "active" ? ["Gate status unavailable until the Owner reconnects"] : []),
+			children: activity?.children.map((child) => ({ name: child.name, status: child.detail ?? child.status })) ?? [],
+			spend: { cost: totals.costUsd, tokens: totals.tokens.total, entries: totals.runs },
+			design: store.readDesign() ?? "",
+			connected,
+			updatedAt: heartbeat,
+			errors,
+		};
+	} catch (error) {
+		errors.push((error as Error).message);
+		return { statement: "Task state unavailable", requirements: [], phase: "UNKNOWN", gates: { design: [], implementation: [] }, blockers: ["Canonical task status is unavailable"], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: false, errors };
+	}
 }
 
 function clean(text: string): string {
@@ -211,7 +117,7 @@ function displayWidth(text: string): number { return Array.from(text).reduce((su
 
 function cut(text: string, width: number): string {
 	if (width <= 0) return "";
-	const cleaned = clean(text);
+	const cleaned = text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ");
 	if (displayWidth(cleaned) <= width) return cleaned;
 	let result = "";
 	let used = 0;
@@ -225,20 +131,27 @@ function cut(text: string, width: number): string {
 }
 
 function wrap(text: string, width: number, prefix = ""): string[] {
-	const usable = Math.max(1, width - prefix.length);
-	const words = clean(text).split(" ").filter(Boolean);
+	const value = clean(text);
+	const indent = " ".repeat(displayWidth(prefix));
 	const lines: string[] = [];
+	let lead = prefix;
 	let line = "";
-	for (const word of words) {
-		if (line && displayWidth(line) + displayWidth(word) + 1 > usable) { lines.push(prefix + cut(line, usable)); line = word; }
-		else line += `${line ? " " : ""}${word}`;
+	let used = displayWidth(lead);
+	for (const char of value) {
+		const cells = charWidth(char);
+		if (line && used + cells > Math.max(1, width)) {
+			lines.push(lead + line);
+			lead = indent;
+			line = char === " " ? "" : char;
+			used = displayWidth(lead) + (char === " " ? 0 : cells);
+		} else { line += char; used += cells; }
 	}
-	lines.push(prefix + cut(line, usable));
+	lines.push(lead + line);
 	return lines;
 }
 
 /** Plain, deterministic board rendering; runtime theming is intentionally optional. */
-export function renderCockpit(snapshot: BoardSnapshot, width: number, feedback = ""): string[] {
+export function renderCockpit(snapshot: BoardSnapshot, width: number): string[] {
 	width = Math.max(1, width);
 	const lines: string[] = [cut(`◆ council cockpit  #${snapshot.taskId ?? "—"}  ${snapshot.phase}${snapshot.connected ? "" : "  · reconnecting"}`, width)];
 	lines.push(cut("─".repeat(width), width), ...wrap(snapshot.statement, width, "Statement: "));
@@ -246,26 +159,25 @@ export function renderCockpit(snapshot: BoardSnapshot, width: number, feedback =
 	lines.push(...(snapshot.requirements.length ? snapshot.requirements.flatMap((r, i) => wrap(r, width, ` ${i + 1}. `)) : ["  (none recorded)"]));
 	for (const [gate, rows] of [["DESIGN GATE", snapshot.gates.design], ["IMPLEMENTATION GATE", snapshot.gates.implementation]] as const) {
 		lines.push("", cut(gate, width));
-		lines.push(...(rows.length ? rows.flatMap((row) => [cut(` ${row.state.padEnd(12)} ${row.name}`, width), ...row.comments.flatMap((c) => wrap(c, width, "   ↳ "))]) : ["  (verdicts pending)"]));
+		lines.push(...(rows.length ? rows.flatMap((row) => [...wrap(`${row.state.padEnd(12)} ${row.name}`, width, " "), ...row.comments.flatMap((c) => wrap(c, width, "   ↳ "))]) : ["  (verdicts pending)"]));
 	}
 	lines.push("", "Blocking comments");
 	lines.push(...(snapshot.blockers.length ? snapshot.blockers.flatMap((b) => wrap(b, width, " • ")) : ["  none"]));
 	lines.push("", "Running children");
-	lines.push(...(snapshot.children.length ? snapshot.children.map((c) => cut(` • ${c.name}: ${c.status}`, width)) : ["  none"]));
+	lines.push(...(snapshot.children.length ? snapshot.children.flatMap((c) => wrap(`${c.name}: ${c.status}`, width, " • ")) : ["  none"]));
 	lines.push("", cut(`Spend  $${snapshot.spend.cost.toFixed(4)} · ${snapshot.spend.tokens.toLocaleString("en-US")} tokens · ${snapshot.spend.entries} runs`, width));
-	if (snapshot.errors.length) lines.push(cut(`State warning: ${snapshot.errors.join(" · ")}`, width));
-	if (feedback) lines.push(cut(feedback, width));
-	lines.push(cut("[a] append requirement", width), cut("[k] kill task", width), cut("[q/Esc] close", width));
+	if (snapshot.errors.length) lines.push(...snapshot.errors.flatMap((error) => wrap(error, width, "State warning: ")));
 	return lines.map((line) => cut(line, width));
 }
 
 export function renderCockpitPage(snapshot: BoardSnapshot, width: number, height: number, offset = 0, feedback = ""): { lines: string[]; offset: number; maxOffset: number } {
-	const all = renderCockpit(snapshot, width, feedback);
-	const bodyHeight = Math.max(1, height - 1);
+	const all = renderCockpit(snapshot, width);
+	const controls = cut(snapshot.taskId ? "↑↓ [a]+req [k]kill [q]close" : "[q] close · no active task", width);
+	const footer = feedback ? [cut(feedback, width), controls] : [controls];
+	const bodyHeight = Math.max(1, height - footer.length);
 	const maxOffset = Math.max(0, all.length - bodyHeight);
 	const safeOffset = Math.max(0, Math.min(offset, maxOffset));
-	const footer = cut(`↑↓${safeOffset + 1}/${all.length} [a]+req [k]kill [q]close`, width);
-	return { lines: [...all.slice(safeOffset, safeOffset + bodyHeight), footer], offset: safeOffset, maxOffset };
+	return { lines: [...all.slice(safeOffset, safeOffset + bodyHeight), ...footer], offset: safeOffset, maxOffset };
 }
 
 export interface RestartState { attempts: number; lastStartedAt?: number }
@@ -516,13 +428,13 @@ export default function cockpit(pi: ExtensionAPI): void {
 					if (["j", "J", "\u001b[B"].includes(data)) { scroll += 1; tui.requestRender(); return; }
 					if (["u", "U", "\u001b[A"].includes(data)) { scroll = Math.max(0, scroll - 1); tui.requestRender(); return; }
 					if (data === "q" || data === "Q" || data === "\u001b") { cleanup?.(); done(undefined); ctx.shutdown(); return; }
-					if (data === "a" || data === "A") void ctx.ui.input("Append requirement", "The Owner will record and propagate this requirement").then((text) => {
+					if (snapshot.taskId && (data === "a" || data === "A")) void ctx.ui.input("Append requirement", "The Owner will record and propagate this requirement").then((text) => {
 						if (!text?.trim()) return;
 						feedback = "Requirement sending…";
 						tui.requestRender();
 						supervisor.append(text.trim()).then((message) => { feedback = message; tui.requestRender(); });
 					});
-					if (data === "k" || data === "K") void ctx.ui.confirm("Kill task?", "This permanently ends the task but keeps all records.").then((confirmed) => {
+					if (snapshot.taskId && (data === "k" || data === "K")) void ctx.ui.confirm("Kill task?", "This permanently ends the task but keeps all records.").then((confirmed) => {
 						if (confirmed) supervisor.killTask().then((message) => { feedback = message; tui.requestRender(); });
 					});
 				},

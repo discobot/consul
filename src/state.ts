@@ -18,7 +18,7 @@ export const GATES: Gate[] = ["design", "implementation"];
 
 /** Runtime bookkeeping is not product implementation. Project config and verifier
  * overrides deliberately remain in committed artifacts and cleanliness checks. */
-const RUNTIME_PATHSPECS = [":(exclude).pi/council/current", ":(exclude).pi/council/intake.json", ":(exclude).pi/council/tasks/**"];
+const RUNTIME_PATHSPECS = [":(exclude).pi/council/current", ":(exclude).pi/council/last", ":(exclude).pi/council/intake.json", ":(exclude).pi/council/tasks/**"];
 
 export interface Requirement {
 	text: string;
@@ -250,7 +250,7 @@ export class LaunchStore {
 
 	constructor(cwd: string) {
 		try {
-			this.cwd = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf-8" }).trim();
+			this.cwd = execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 		} catch {
 			// createTask supplies the more useful error for non-repositories.
 			this.cwd = path.resolve(cwd);
@@ -263,6 +263,10 @@ export class LaunchStore {
 
 	private get currentFile(): string {
 		return path.join(this.rootDir, "current");
+	}
+
+	private get lastFile(): string {
+		return path.join(this.rootDir, "last");
 	}
 
 	taskDir(id: string): string {
@@ -352,13 +356,13 @@ export class LaunchStore {
 		return config as LaunchConfig;
 	}
 
-	current(): TaskRecord | null {
+	private taskFromPointer(file: string, label: string): TaskRecord | null {
 		let id: string;
 		try {
-			id = fs.readFileSync(this.currentFile, "utf-8").trim();
+			id = fs.readFileSync(file, "utf-8").trim();
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-			throw new Error(`Cannot read council current-task pointer at ${this.currentFile}: ${(error as Error).message}`);
+			throw new Error(`Cannot read council ${label} pointer at ${file}: ${(error as Error).message}`);
 		}
 		if (!id) return null;
 		const taskPath = path.join(this.taskDir(id), "task.json");
@@ -372,9 +376,12 @@ export class LaunchStore {
 			) throw new Error("invalid task record shape");
 			return task;
 		} catch (error) {
-			throw new Error(`Cannot load current council task from ${taskPath}: ${(error as Error).message}`);
+			throw new Error(`Cannot load ${label} council task from ${taskPath}: ${(error as Error).message}`);
 		}
 	}
+
+	current(): TaskRecord | null { return this.taskFromPointer(this.currentFile, "current-task"); }
+	latest(): TaskRecord | null { return this.current() ?? this.taskFromPointer(this.lastFile, "last-task"); }
 
 	private atomicWrite(file: string, content: string): void {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -497,7 +504,7 @@ export class LaunchStore {
 	}
 
 	readDesign(): string | null {
-		const task = this.current();
+		const task = this.latest();
 		if (!task) return null;
 		try {
 			return fs.readFileSync(this.designPath(task.id), "utf-8");
@@ -518,7 +525,7 @@ export class LaunchStore {
 	}
 
 	loadVerdicts(): Verdict[] {
-		const task = this.current();
+		const task = this.latest();
 		if (!task) return [];
 		let raw: string;
 		try {
@@ -546,7 +553,7 @@ export class LaunchStore {
 
 	/** Read complete ledger records. Only an unterminated malformed final record is ignored. */
 	loadSpend(): SpendEntry[] {
-		const task = this.current();
+		const task = this.latest();
 		if (!task) return [];
 		const file = path.join(this.taskDir(task.id), "spend.jsonl");
 		let raw: string;
@@ -610,7 +617,7 @@ export class LaunchStore {
 	}
 
 	private readProjection<T extends { taskId: string }>(name: string): T | null {
-		const task = this.current();
+		const task = this.latest();
 		if (!task) return null;
 		const file = path.join(this.taskDir(task.id), name);
 		try {
@@ -641,6 +648,12 @@ export class LaunchStore {
 		task.closedAt = new Date().toISOString();
 		if (summary) task.summary = summary;
 		this.saveTask(task);
+		const existingStatus = this.readStatus();
+		if (existingStatus) {
+			const finalStatus = { ...existingStatus, phase: status === "done" ? "DONE" as const : "KILLED" as const, generatedAt: task.closedAt!, heartbeatAt: task.closedAt! };
+			this.atomicWrite(path.join(this.taskDir(task.id), "status.json"), `${JSON.stringify(finalStatus, null, "\t")}\n`);
+		}
+		this.atomicWrite(this.lastFile, `${task.id}\n`);
 		this.atomicWrite(this.currentFile, "\n");
 		return task;
 	}

@@ -37,7 +37,7 @@ export default function (pi: ExtensionAPI) {
 
 		refreshPhase = async (refreshCtx: ExtensionContext): Promise<void> => {
 			const store = storeFor(refreshCtx.cwd);
-			const task = store.current();
+			const task = store.latest();
 			if (!task) {
 				phase = undefined;
 				phaseTaskId = undefined;
@@ -45,6 +45,12 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			try {
+				if (task.status !== "active") {
+					phase = task.status === "done" ? "DONE" : "KILLED";
+					phaseTaskId = task.id;
+					refreshCtx.ui.setTitle(`council · #${task.id} · ${phase}`);
+					return;
+				}
 				const reports = await gateReports(refreshCtx.cwd);
 				phase = derivePhase(task, store.readDesign() !== null, reports.design, reports.impl, {
 					design: liveGate === "design",
@@ -64,7 +70,7 @@ export default function (pi: ExtensionAPI) {
 			invalidate() {},
 			render(width: number): string[] {
 				// Deliberately uncached: task creation/closure must appear on the next render.
-				const task: TaskRecord | null = storeFor(ctx.cwd).current();
+				const task: TaskRecord | null = storeFor(ctx.cwd).latest();
 				const brand = theme.fg("accent", theme.bold(" ◆ council "));
 				let detail: string;
 				if (!task) {

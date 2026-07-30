@@ -67,10 +67,18 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 
 	async function render(ctx: ExtensionContext): Promise<void> {
 		const store = storeFor(ctx.cwd);
-		const task = store.current();
-		if (!task || task.status === "killed") {
-			ctx.ui.setWidget(WIDGET_KEY, undefined);
-			ctx.ui.setStatus(WIDGET_KEY, undefined);
+		const task = store.latest();
+		if (!task) {
+			if (ctx.hasUI) { ctx.ui.setWidget(WIDGET_KEY, undefined); ctx.ui.setStatus(WIDGET_KEY, undefined); }
+			return;
+		}
+		if (task.status !== "active") {
+			if (ctx.hasUI) {
+				const phase = task.status === "done" ? "DONE" : "KILLED";
+				const spend = store.spendTotals();
+				ctx.ui.setWidget(WIDGET_KEY, [`◆ council #${task.id} ${phase} · $${spend.costUsd.toFixed(4)} · ${task.summary ?? "task archived"}`], { placement: "aboveEditor" });
+				ctx.ui.setStatus(WIDGET_KEY, `◆ #${task.id} ${phase}`);
+			}
 			return;
 		}
 		const { design, impl } = await gateReports(ctx.cwd);
@@ -85,12 +93,13 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 			["implementation"]: liveGate === "implementation",
 		});
 		const spend = store.spendTotals();
+		const currentFingerprints = new Map(discoverVerifiers(ctx.cwd).map((verifier) => [verifier.name, verifier.fingerprint]));
 		const projectGate = (report: GateReport) => ({
 			hash: report.hash,
 			holds: report.holds,
 			verifiers: report.verifiers.map((verifier) => ({
 				name: verifier.name,
-				fingerprint: verifier.verdict?.fingerprint ?? "",
+				fingerprint: currentFingerprints.get(verifier.name) ?? "",
 				state: running.has(`${report.gate}:${verifier.name}`) ? "reviewing" as const : verifier.state,
 				...(verifier.verdict?.comments.length ? { comments: verifier.verdict.comments } : {}),
 			})),
@@ -145,8 +154,12 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 
 	async function statusMarkdown(ctx: ExtensionContext): Promise<string> {
 		const store = storeFor(ctx.cwd);
-		const task = store.current();
+		const task = store.latest();
 		if (!task) return "No task. Send a message to set one — the first message becomes the immutable task statement.";
+		if (task.status !== "active") {
+			const spend = store.spendTotals();
+			return [`## council — task #${task.id} · ${task.status === "done" ? "DONE" : "KILLED"}`, "", `**Statement**: ${task.statement}`, ...(task.summary ? [`**Outcome**: ${task.summary}`] : []), `**Task spend**: $${spend.costUsd.toFixed(4)} · ${spend.tokens.total.toLocaleString()} tokens`, "", `Record: .pi/council/tasks/${task.id}/ · send a new message to start the next task`].join("\n");
+		}
 		const { design, impl } = await gateReports(ctx.cwd);
 		const liveGate: Gate | undefined = [...liveChildren.keys()].some((key) => key.startsWith("design:"))
 			? "design"

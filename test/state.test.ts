@@ -117,7 +117,7 @@ test("phase derivation and config/state validation are explicit", async (t) => {
 	fs.writeFileSync(path.join(store.rootDir, "config.json"), '{"verifierModels":{"design":""}}');
 	assert.throws(() => store.loadConfig(), /verifierModels must map/);
 	fs.writeFileSync(path.join(store.taskDir(task.id), "task.json"), "not json");
-	assert.throws(() => store.current(), /Cannot load current council task/);
+	assert.throws(() => store.current(), /Cannot load current-task council task/);
 });
 
 test("spend ledger aggregates tokens and cost and tolerates only a torn final record", async (t) => {
@@ -196,6 +196,10 @@ test("activity and status projections are atomically persisted and malformed sta
 	};
 	store.writeStatus(status);
 	assert.deepEqual(store.readStatus(), status);
+	store.close("done", "finished");
+	assert.equal(store.current(), null);
+	assert.equal(store.latest()?.status, "done");
+	assert.equal(store.readStatus()?.phase, "DONE");
 	assert.equal(fs.readdirSync(store.taskDir(task.id)).some((name) => name.includes(".tmp-")), false);
 	fs.writeFileSync(path.join(store.taskDir(task.id), "status.json"), "not-json");
 	assert.throws(() => store.readStatus(), /Cannot load council status.json/);

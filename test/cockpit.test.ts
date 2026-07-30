@@ -25,7 +25,8 @@ function fixture(): { cwd: string; dir: string } {
 	fs.writeFileSync(path.join(dir, "task.json"), JSON.stringify({
 		id: "abc123",
 		statement: "Ship a separate cockpit",
-		requirements: [{ text: "Show both gates" }, { text: "Never mutate task files" }],
+		requirements: [{ text: "Show both gates", addedAt: "now" }, { text: "Never mutate task files", addedAt: "now" }],
+		baseCommit: "00000000", baseBranch: "main", createdAt: "now",
 		status: "active",
 	}));
 	return { cwd, dir };
@@ -35,20 +36,18 @@ test("snapshot projects status, activity, verdict history, design, and spend", (
 	const { cwd, dir } = fixture();
 	const now = Date.now();
 	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
-		phase: "IMPLEMENTING",
-		heartbeatAt: new Date(now).toISOString(),
-		gates: {
-			design: { verifiers: [{ name: "clean-code", state: "go" }] },
-			implementation: { verifiers: [{ name: "interfaces", state: "no-go", comments: ["Fix RPC framing"] }] },
-		},
-		blockers: ["interfaces: Fix RPC framing"],
+		taskId: "abc123", phase: "IMPLEMENTING", generatedAt: new Date(now).toISOString(),
+		heartbeatAt: new Date(now).toISOString(), pendingInputIds: [],
+		design: { hash: "d", holds: true, verifiers: [{ name: "clean-code", fingerprint: "f", state: "go" }] },
+		implementation: { hash: "i", holds: false, verifiers: [{ name: "interfaces", fingerprint: "f", state: "no-go", comments: ["Fix RPC framing"] }] },
+		blockers: ["interfaces: Fix RPC framing"], spend: { runs: 0, costUsd: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, byKind: {} },
 	}));
-	fs.writeFileSync(path.join(dir, "activity.json"), JSON.stringify({ children: [{ name: "worker:rpc", status: "running" }] }));
+	fs.writeFileSync(path.join(dir, "activity.json"), JSON.stringify({ taskId: "abc123", updatedAt: "now", children: [{ id: "worker:rpc", kind: "worker", name: "worker:rpc", status: "running", startedAt: "now", updatedAt: "now" }] }));
 	fs.writeFileSync(path.join(dir, "design.md"), "# Cockpit\n");
 	fs.writeFileSync(path.join(dir, "verdicts.jsonl"), '{"gate":"design","verifier":"old","verdict":"go"}\n{"torn":');
 	fs.writeFileSync(path.join(dir, "spend.jsonl"), [
-		JSON.stringify({ tokens: { input: 900, output: 300, cacheRead: 0, cacheWrite: 0 }, costUsd: 0.25 }),
-		JSON.stringify({ totalTokens: 300, costUsd: 0.05 }),
+		JSON.stringify({ at: "now", kind: "worker", name: "w", model: "p/m", tokens: { input: 900, output: 300, cacheRead: 0, cacheWrite: 0 }, costUsd: 0.25, status: "ok" }),
+		JSON.stringify({ at: "now", kind: "verifier", name: "v", model: "p/m", tokens: { input: 200, output: 100, cacheRead: 0, cacheWrite: 0 }, costUsd: 0.05, status: "ok" }),
 		"",
 	].join("\n"));
 
@@ -69,9 +68,11 @@ test("stale Owner heartbeat is a board-level reconnect condition", () => {
 	const { cwd, dir } = fixture();
 	const now = Date.now();
 	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
-		phase: "DESIGN_GATE",
-		heartbeatAt: new Date(now - 60_000).toISOString(),
-		design: { verifiers: [{ name: "design", state: "reviewing" }] },
+		taskId: "abc123", phase: "DESIGN_GATE", generatedAt: new Date(now - 60_000).toISOString(),
+		heartbeatAt: new Date(now - 60_000).toISOString(), pendingInputIds: [], blockers: [],
+		design: { hash: "d", holds: false, verifiers: [{ name: "design", fingerprint: "f", state: "reviewing" }] },
+		implementation: { hash: "i", holds: false, verifiers: [] },
+		spend: { runs: 0, costUsd: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, byKind: {} },
 	}));
 	const snapshot = loadCockpitSnapshot(cwd, now);
 	assert.equal(snapshot.connected, false);
@@ -82,7 +83,7 @@ test("stale Owner heartbeat is a board-level reconnect condition", () => {
 
 test("render is a bounded, complete task board with visible controls", () => {
 	const { cwd } = fixture();
-	const lines = renderCockpit(loadCockpitSnapshot(cwd), 48, "Requirement accepted by Owner");
+	const lines = renderCockpit(loadCockpitSnapshot(cwd), 48);
 	for (const line of lines) assert.ok(Array.from(line).length <= 48, JSON.stringify(line));
 	const text = lines.join("\n");
 	assert.match(text, /Statement:/);
@@ -92,13 +93,22 @@ test("render is a bounded, complete task board with visible controls", () => {
 	assert.match(text, /Blocking comments/);
 	assert.match(text, /Running children/);
 	assert.match(text, /Spend/);
-	assert.match(text, /\[a\] append requirement/);
-	assert.match(text, /\[k\] kill task/);
-	assert.match(text, /\[q\/Esc\] close/);
-	const page = renderCockpitPage({ ...loadCockpitSnapshot(cwd), requirements: Array.from({ length: 30 }, (_, i) => `requirement ${i}`) }, 40, 12, 999);
+	assert.equal(lines.filter((line) => line.includes("1. ")).length, 1, "wrapped requirements are numbered once");
+	const page = renderCockpitPage({ ...loadCockpitSnapshot(cwd), requirements: Array.from({ length: 30 }, (_, i) => `requirement ${i}`) }, 40, 12, 999, "Requirement accepted by Owner");
 	assert.equal(page.lines.length, 12);
 	assert.match(page.lines.at(-1)!, /\+req.*kill.*close/);
+	assert.equal(page.lines.at(-2), "Requirement accepted by Owner", "feedback stays fixed above controls");
 	assert.ok(page.maxOffset > 0);
+	fs.rmSync(cwd, { recursive: true, force: true });
+});
+
+test("missing status never promotes historical verdicts to fresh gate state", () => {
+	const { cwd, dir } = fixture();
+	fs.writeFileSync(path.join(dir, "verdicts.jsonl"), '{"gate":"design","verifier":"design","verdict":"go","hash":"old"}\n');
+	const snapshot = loadCockpitSnapshot(cwd);
+	assert.deepEqual(snapshot.gates.design, []);
+	assert.equal(snapshot.phase, "UNKNOWN");
+	assert.match(snapshot.blockers.join(" "), /status unavailable/i);
 	fs.rmSync(cwd, { recursive: true, force: true });
 });
 
