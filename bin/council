@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * launch-review launcher: starts pi with the launch-review extension and its
+ * council launcher: starts pi with the council extension and its
  * custom TUI skin preloaded. All arguments pass through to pi.
  *
- * pi is resolved from $LAUNCH_REVIEW_PI (a pi binary or a cli.js/cli.ts entry),
+ * pi is resolved from $COUNCIL_PI (a pi binary or a cli.js/cli.ts entry),
  * falling back to `pi` on PATH.
  */
 
@@ -15,7 +15,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const extensionArgs = ["-e", path.join(root, "index.ts"), "-e", path.join(root, "src", "tui-skin.ts")];
 const passThrough = process.argv.slice(2);
 
-const override = process.env.LAUNCH_REVIEW_PI;
+const override = process.env.COUNCIL_PI;
 const invocation = override
 	? /\.(js|ts|mjs)$/.test(override)
 		? { command: process.execPath, args: [override] }
@@ -29,9 +29,9 @@ const result = spawnSync(invocation.command, [...invocation.args, ...extensionAr
 if (result.error) {
 	const hint =
 		override === undefined
-			? "Could not run `pi`. Install it (npm i -g @earendil-works/pi-coding-agent) or point LAUNCH_REVIEW_PI at a pi binary or cli.js."
-			: `Could not run LAUNCH_REVIEW_PI (${override}).`;
-	console.error(`launch-review: ${hint}\n${result.error.message}`);
+			? "Could not run `pi`. Install it (npm i -g @earendil-works/pi-coding-agent) or point COUNCIL_PI at a pi binary or cli.js."
+			: `Could not run COUNCIL_PI (${override}).`;
+	console.error(`council: ${hint}\n${result.error.message}`);
 	process.exit(1);
 }
 process.exit(result.status ?? 0);

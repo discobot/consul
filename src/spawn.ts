@@ -42,9 +42,9 @@ export interface ChildResult {
 
 /** Re-invoke the same pi that is running us (works for dev checkouts, npm installs,
  * and standalone binaries). Mirrors the reference subagent extension.
- * LAUNCH_REVIEW_PI overrides (a pi binary, or a .js/.ts entry run with node). */
+ * COUNCIL_PI overrides (a pi binary, or a .js/.ts entry run with node). */
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
-	const override = process.env.LAUNCH_REVIEW_PI;
+	const override = process.env.COUNCIL_PI;
 	if (override) {
 		return /\.(js|ts|mjs)$/.test(override)
 			? { command: process.execPath, args: [override, ...args] }
@@ -73,7 +73,7 @@ export async function runChild(
 	signal: AbortSignal | undefined,
 	onProgress?: (progress: ChildProgress) => void,
 ): Promise<ChildResult> {
-	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "launch-review-"));
+	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "council-"));
 	const promptFile = path.join(tmpDir, "system-prompt.md");
 	await fs.promises.writeFile(promptFile, spec.systemPrompt, { encoding: "utf-8", mode: 0o600 });
 

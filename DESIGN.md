@@ -1,8 +1,8 @@
-# launch-review — a launch-committee process for pi
+# council — a launch-committee process for pi
 
 A pi extension that turns code development into a non-interactive, task-based process,
 loosely modeled on Google's search launch review: an accountable **Owner** drives the work,
-a fixed panel of **Verifiers** (the launch committee) gives go / no-go verdicts at two gates
+a fixed panel of **Verifiers** (the council) gives go / no-go verdicts at two gates
 (design and implementation), and nothing ships past a gate without a full, *fresh* set of GO
 verdicts.
 
@@ -63,7 +63,7 @@ Each verifier is a markdown definition (frontmatter + system prompt). Built-in p
 | `github-clarity` | Is a PR created; are comments & checks addressed? (implementation gate only) |
 | `task-completeness` | Does the design address the task? Does the realization follow the design? |
 
-Projects can add/override verifiers in `.pi/launch/verifiers/*.md`.
+Projects can add/override verifiers in `.pi/council/verifiers/*.md`.
 
 Each query, a verifier receives exactly: its system prompt + a context block (task
 statement, requirements, repo status, the gate artifact) + read-only tools to inspect the
@@ -132,16 +132,16 @@ state, workers, verdict comments), `/task-kill` (archive and reset).
 Status is also always visible in a persistent TUI widget:
 
 ```
-▌ launch-review  #a3f1  IMPLEMENTING          3 requirements (+1 new)
+▌ council  #a3f1  IMPLEMENTING          3 requirements (+1 new)
 ▌ design ✓✓✓✓✓✓✓✓   impl ✓✗⏳○○○⚠✓    workers: 2 running
 ```
 
 ## Persistence
 
-Everything lives in the repo at `.pi/launch/`:
+Everything lives in the repo at `.pi/council/`:
 
 ```
-.pi/launch/
+.pi/council/
   current            # id of the active task
   tasks/<id>/
     task.json        # statement, base commit, phase, timestamps
@@ -158,7 +158,7 @@ survives session restarts (`pi` resumes are safe — state is on disk, not in co
 
 - Workers and verifiers are spawned as `pi --mode json -p --no-session` subprocesses with
   `--append-system-prompt`, restricted `--tools`, and explicit `--provider/--model`
-  (configurable in `.pi/launch/config.json`; falls back to the main session's model).
+  (configurable in `.pi/council/config.json`; falls back to the main session's model).
 - Fan-out uses a concurrency-limited pool (default 8) — a full 8-verifier panel is one
   round-trip wall-clock-wise.
 - Every subprocess result streams into the tool-call renderer, so the user sees live
@@ -166,15 +166,15 @@ survives session restarts (`pi` resumes are safe — state is on disk, not in co
 
 ## Launcher
 
-`bin/launch-review` is the dedicated entry point: it starts pi with the extension plus a
+`bin/council` is the dedicated entry point: it starts pi with the extension plus a
 custom TUI skin (`src/tui-skin.ts`) — a branded header showing the active task, id, phase,
-and requirement count at all times, a launch-review terminal title, and a
+and requirement count at all times, a council terminal title, and a
 committee-flavored working indicator. All arguments pass through to pi; the pi entry is
-resolved from `$LAUNCH_REVIEW_PI` or PATH.
+resolved from `$COUNCIL_PI` or PATH.
 
 ## Self-verification (acceptance test for this project)
 
-Run pi with this extension inside this repo and set the task: *"Verify that launch-review
+Run pi with this extension inside this repo and set the task: *"Verify that council
 implements DESIGN.md; fix what doesn't."* The Owner must derive requirements, design its
 verification approach, pass the design gate, do the work, and pass the implementation gate
 — exercising task creation, worker dispatch, the parallel panel, staleness, and gating on

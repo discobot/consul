@@ -9,7 +9,7 @@ import { Markdown } from "@earendil-works/pi-tui";
 import { type Gate, type GateReport, storeFor, type TaskRecord } from "./state.ts";
 import { discoverVerifiers, verifiersForGate } from "./verifiers.ts";
 
-const WIDGET_KEY = "launch-review";
+const WIDGET_KEY = "council";
 const REFRESH_THROTTLE_MS = 1000;
 
 /** Compact verifier labels for the one-line-per-gate widget. */
@@ -81,7 +81,7 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 
 		const statement = task.statement.length > 46 ? `${task.statement.slice(0, 46)}…` : task.statement;
 		const lines = [
-			theme.fg("accent", `◆ launch #${task.id} `) +
+			theme.fg("accent", `◆ council #${task.id} `) +
 				theme.fg("warning", phase) +
 				theme.fg("muted", ` · ${task.requirements.length} reqs · ${statement}`),
 			gateLine(design, theme, running),
@@ -140,7 +140,7 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 		};
 
 		return [
-			`## launch-review — task #${task.id} · ${phase}`,
+			`## council — task #${task.id} · ${phase}`,
 			"",
 			`**Statement**: ${task.statement}`,
 			`**Base**: ${task.baseBranch} @ ${task.baseCommit.slice(0, 8)} · created ${task.createdAt.slice(0, 16).replace("T", " ")}`,
@@ -156,17 +156,17 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 				? ["", "### Running now", ...[...liveChildren.entries()].map(([n, s]) => `- ${n}: ${s}`)]
 				: []),
 			"",
-			`_Task files: .pi/launch/tasks/${task.id}/ · append requirements by sending a message · /task kill to abandon_`,
+			`_Task files: .pi/council/tasks/${task.id}/ · append requirements by sending a message · /task kill to abandon_`,
 		].join("\n");
 	}
 
-	pi.registerMessageRenderer("launch-review-status", (message, _opts, _theme) => {
+	pi.registerMessageRenderer("council-status", (message, _opts, _theme) => {
 		const text = typeof message.content === "string" ? message.content : "";
 		return new Markdown(text, 1, 1, getMarkdownTheme());
 	});
 
 	pi.registerCommand("task", {
-		description: "Show launch-review task status, or `/task kill` to abandon the task",
+		description: "Show council task status, or `/task kill` to abandon the task",
 		handler: async (args, ctx) => {
 			const store = storeFor(ctx.cwd);
 			if (args.trim() === "kill") {
@@ -177,7 +177,7 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 				}
 				const ok = await ctx.ui.confirm(
 					"Kill task?",
-					`Task #${task.id} will be archived (its files stay in .pi/launch/tasks/${task.id}/). You can then set a new task.`,
+					`Task #${task.id} will be archived (its files stay in .pi/council/tasks/${task.id}/). You can then set a new task.`,
 				);
 				if (!ok) return;
 				store.close("killed");
@@ -186,7 +186,7 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 				return;
 			}
 			pi.sendMessage({
-				customType: "launch-review-status",
+				customType: "council-status",
 				content: await statusMarkdown(ctx),
 				display: true,
 			});

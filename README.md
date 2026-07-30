@@ -1,4 +1,4 @@
-# launch-review
+# council
 
 A [pi](https://pi.dev) extension that turns development into a launch-committee process:
 you set a task, an **Owner** agent completes it, and a panel of transient **Verifiers**
@@ -11,12 +11,12 @@ See [DESIGN.md](DESIGN.md) for the full design.
 
 ## Usage
 
-The dedicated launcher starts pi with the extension and the launch-review TUI skin
+The dedicated launcher starts pi with the extension and the council TUI skin
 (branded header with the live task, committee working indicator) preloaded:
 
 ```bash
-launch-review/bin/launch-review            # uses `pi` from PATH
-LAUNCH_REVIEW_PI=/path/to/pi/dist/cli.js launch-review/bin/launch-review
+council/bin/council            # uses `pi` from PATH
+COUNCIL_PI=/path/to/pi/dist/cli.js council/bin/council
 ```
 
 Any arguments pass through to pi (`--model`, `--provider`, …). Alternatively load the
@@ -24,10 +24,10 @@ extension into a plain pi session:
 
 ```bash
 # one-off
-pi -e /path/to/launch-review/index.ts
+pi -e /path/to/council/index.ts
 
 # or install into a project (auto-loads, hot-reloadable)
-ln -s /path/to/launch-review your-project/.pi/extensions/launch-review
+ln -s /path/to/council your-project/.pi/extensions/council
 ```
 
 Then, in a git repository with at least one commit:
@@ -39,7 +39,7 @@ Then, in a git repository with at least one commit:
   kill it with `/task kill` and start over.
 - **Watch progress** in the status widget above the editor, or with `/task` for the full
   report (requirements, per-verifier gate states, blocking comments). All task state is
-  plain files under `.pi/launch/tasks/<id>/`.
+  plain files under `.pi/council/tasks/<id>/`.
 
 ## The verifier panel
 
@@ -47,11 +47,11 @@ Then, in a git repository with at least one commit:
 `task-completeness` (both gates), plus `ux-bugs` and `github-clarity` (implementation
 gate). Each query runs the verifier afresh — its system prompt, the repo status, and the
 task are all it ever sees. Definitions live in [`verifiers/`](verifiers/); a project can
-override or extend them in `.pi/launch/verifiers/*.md` (matched by `name`).
+override or extend them in `.pi/council/verifiers/*.md` (matched by `name`).
 
 ## Configuration
 
-`.pi/launch/config.json` (all optional):
+`.pi/council/config.json` (all optional):
 
 ```json
 {
@@ -63,7 +63,7 @@ override or extend them in `.pi/launch/verifiers/*.md` (matched by `name`).
 }
 ```
 
-Without a config, spawned agents use the main session's model. `LAUNCH_REVIEW_PI` can
+Without a config, spawned agents use the main session's model. `COUNCIL_PI` can
 point at a specific pi entry (binary or cli.js) for spawned children; by default the
 running pi re-invokes itself.
 
@@ -71,6 +71,6 @@ running pi re-invokes itself.
 
 ```bash
 node --test test/unit.ts                                    # logic tests, no LLM
-LAUNCH_REVIEW_PI=/path/to/pi/dist/cli.js \
+COUNCIL_PI=/path/to/pi/dist/cli.js \
   node test/integration-child.ts provider/model             # one real verifier run
 ```

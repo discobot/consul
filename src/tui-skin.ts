@@ -1,5 +1,5 @@
 /**
- * The launch-review TUI skin, loaded by bin/launch-review alongside the main
+ * The council TUI skin, loaded by bin/council alongside the main
  * extension: a branded header that always shows the task at a glance, a terminal
  * title, and a committee-flavored working indicator. The gate-by-gate detail
  * lives in the main extension's widget and /task report.
@@ -13,7 +13,7 @@ const TASK_CACHE_MS = 500;
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
-		ctx.ui.setTitle("launch-review");
+		ctx.ui.setTitle("council");
 		ctx.ui.setWorkingIndicator({ frames: ["◇", "◈", "◆", "◈"], intervalMs: 160 });
 
 		let cached: TaskRecord | null = null;
@@ -30,7 +30,7 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setHeader((_tui, theme) => ({
 			invalidate() {},
 			render(width: number): string[] {
-				const brand = theme.fg("accent", theme.bold(" ◆ LAUNCH REVIEW "));
+				const brand = theme.fg("accent", theme.bold(" ◆ COUNCIL "));
 				const task = currentTask();
 				let detail: string;
 				if (!task) {

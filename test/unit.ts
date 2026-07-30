@@ -1,8 +1,8 @@
 /**
- * Logic tests for launch-review that need no LLM: task store, hash pinning,
+ * Logic tests for council that need no LLM: task store, hash pinning,
  * staleness cascade, gate enforcement, verdict parsing, verifier discovery.
  *
- * Run: node --test test/unit.ts  (from the launch-review directory, node >= 22.19)
+ * Run: node --test test/unit.ts  (from the council directory, node >= 22.19)
  */
 
 import * as assert from "node:assert/strict";
@@ -15,7 +15,7 @@ import { LaunchStore, type Verdict } from "../src/state.ts";
 import { discoverVerifiers, parseFrontmatter, parseVerdict, verifiersForGate } from "../src/verifiers.ts";
 
 function makeRepo(): string {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-review-test-"));
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "council-test-"));
 	const git = (...args: string[]) => execFileSync("git", args, { cwd: dir });
 	git("init", "-q");
 	git("config", "user.email", "test@test");
@@ -84,14 +84,14 @@ test("gates: pending -> go -> holds; edits and appended requirements stale appro
 	assert.deepEqual(report.verifiers.map((v) => v.state), ["stale", "stale"]);
 });
 
-test("implementation hash tracks worktree changes but ignores .pi/launch", async () => {
+test("implementation hash tracks worktree changes but ignores .pi/council", async () => {
 	const dir = makeRepo();
 	const store = new LaunchStore(dir);
 	await store.createTask("task", ["r"]);
 	store.writeDesign("# D");
 	const h1 = await store.implementationHash();
 
-	// launch-review's own bookkeeping must not stale the gate it just sourced
+	// council's own bookkeeping must not stale the gate it just sourced
 	goVerdict(store, "implementation", "a", h1);
 	assert.equal(await store.implementationHash(), h1);
 
@@ -158,7 +158,7 @@ test("verifier discovery: eight built-ins, project overrides win, gates respecte
 	assert.equal(verifiersForGate(builtins, "implementation").length, 8);
 	for (const v of builtins) assert.ok(v.systemPrompt.length > 100, `${v.name} has a real system prompt`);
 
-	const overrideDir = path.join(dir, ".pi", "launch", "verifiers");
+	const overrideDir = path.join(dir, ".pi", "council", "verifiers");
 	fs.mkdirSync(overrideDir, { recursive: true });
 	fs.writeFileSync(
 		path.join(overrideDir, "clean-code.md"),

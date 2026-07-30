@@ -1,5 +1,5 @@
 /**
- * launch-review — a launch-committee development process for pi.
+ * council — a launch-committee development process for pi.
  *
  * The user sets a task (their first message); the session agent becomes the Owner and
  * completes it non-interactively: derive requirements → design → design gate (parallel
@@ -7,7 +7,7 @@
  * Verdicts are pinned to content hashes; any change (including appended requirements)
  * stales the affected approvals, and the gates are enforced in code.
  *
- * See DESIGN.md. Load with `pi -e path/to/launch-review/index.ts` or symlink this
+ * See DESIGN.md. Load with `pi -e path/to/council/index.ts` or symlink this
  * directory into .pi/extensions/.
  */
 
@@ -71,8 +71,8 @@ export default function (pi: ExtensionAPI) {
 		const task = storeFor(ctx.cwd).current();
 		const notice =
 			!task || task.status !== "active"
-				? "[launch-review] This message sets the task. Record it with task_set (verbatim statement + derived requirements), then run the full process to completion."
-				: `[launch-review] Mid-task user message on task #${task.id}. This is an appended requirement (or an explicit kill request), not chat: record it with task_requirements_add, then propagate — update the design and implementation as needed and re-source every verdict this stales.`;
+				? "[council] This message sets the task. Record it with task_set (verbatim statement + derived requirements), then run the full process to completion."
+				: `[council] Mid-task user message on task #${task.id}. This is an appended requirement (or an explicit kill request), not chat: record it with task_requirements_add, then propagate — update the design and implementation as needed and re-source every verdict this stales.`;
 		return { action: "transform", text: `${notice}\n\n${event.text}`, images: event.images };
 	});
 }

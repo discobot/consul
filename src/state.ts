@@ -1,5 +1,5 @@
 /**
- * Task state: persistence under .pi/launch/, content hashing, and gate logic.
+ * Task state: persistence under .pi/council/, content hashing, and gate logic.
  *
  * Everything is plain files so the user can inspect task state without the TUI
  * and so state survives session restarts.
@@ -18,7 +18,7 @@ export const GATES: Gate[] = ["design", "implementation"];
 
 /** Path prefix (relative, POSIX) excluded from implementation-gate hashing so that
  * recording verdicts and task state never stales the gate it just sourced. */
-const LAUNCH_DIR_PREFIX = ".pi/launch";
+const LAUNCH_DIR_PREFIX = ".pi/council";
 
 export interface Requirement {
 	text: string;
@@ -89,7 +89,7 @@ export class LaunchStore {
 	}
 
 	get rootDir(): string {
-		return path.join(this.cwd, ".pi", "launch");
+		return path.join(this.cwd, ".pi", "council");
 	}
 
 	private get currentFile(): string {
@@ -151,7 +151,7 @@ export class LaunchStore {
 			baseBranch = await git(this.cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
 		} catch (err) {
 			throw new Error(
-				`launch-review requires a git repository with at least one commit (${err instanceof Error ? err.message.split("\n")[0] : err}).`,
+				`council requires a git repository with at least one commit (${err instanceof Error ? err.message.split("\n")[0] : err}).`,
 			);
 		}
 		const now = new Date().toISOString();
@@ -243,7 +243,7 @@ export class LaunchStore {
 
 	/** What implementation-gate verdicts are pinned to: the design hash + every change
 	 * to the working tree since the task's base commit (tracked and untracked),
-	 * excluding launch-review's own state directory. */
+	 * excluding council's own state directory. */
 	async implementationHash(): Promise<string> {
 		const task = this.mustCurrent();
 		const diff = await git(this.cwd, ["diff", task.baseCommit, "--", ".", `:(exclude)${LAUNCH_DIR_PREFIX}`]);

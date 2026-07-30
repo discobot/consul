@@ -74,10 +74,10 @@ function loadVerifierDir(dir: string, source: "builtin" | "project"): VerifierDe
 }
 
 /** Built-ins ship next to the extension; projects may override or extend any of them
- * by name in `.pi/launch/verifiers/*.md`. */
+ * by name in `.pi/council/verifiers/*.md`. */
 export function discoverVerifiers(cwd: string): VerifierDef[] {
 	const builtinDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "verifiers");
-	const projectDir = path.join(cwd, ".pi", "launch", "verifiers");
+	const projectDir = path.join(cwd, ".pi", "council", "verifiers");
 	const merged = new Map<string, VerifierDef>();
 	for (const def of loadVerifierDir(builtinDir, "builtin")) merged.set(def.name, def);
 	for (const def of loadVerifierDir(projectDir, "project")) merged.set(def.name, def);
@@ -107,7 +107,7 @@ export async function buildTaskContext(store: LaunchStore, task: TaskRecord): Pr
 
 export async function buildVerifierPrompt(store: LaunchStore, task: TaskRecord, gate: Gate): Promise<string> {
 	const sections = [
-		`You are serving on the launch committee. Deliver your go / no-go verdict for the **${gate} gate** of the task below. Judge only the concern defined in your system prompt.`,
+		`You are serving on the council. Deliver your go / no-go verdict for the **${gate} gate** of the task below. Judge only the concern defined in your system prompt.`,
 		"",
 		await buildTaskContext(store, task),
 	];

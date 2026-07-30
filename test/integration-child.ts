@@ -1,6 +1,6 @@
 /**
  * Integration: spawn one real verifier child against a scratch task and parse its
- * verdict. Requires pi auth. Run from the launch-review dir:
+ * verdict. Requires pi auth. Run from the council dir:
  *   node test/integration-child.ts <provider/model>
  */
 
@@ -15,7 +15,7 @@ import { buildVerifierPrompt, discoverVerifiers, parseVerdict } from "../src/ver
 const model = process.argv[2];
 if (!model) throw new Error("usage: node test/integration-child.ts <provider/model>");
 
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), "launch-review-int-"));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), "council-int-"));
 const git = (...args: string[]) => execFileSync("git", args, { cwd: dir });
 git("init", "-q");
 git("config", "user.email", "t@t");

@@ -38,7 +38,7 @@ function resolveModel(ctx: ExtensionContext, kind: "verifier" | "worker", overri
 		(ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
 	if (!model) {
 		throw new Error(
-			"No model available for spawned agents. Set `model` (\"provider/model\") in .pi/launch/config.json.",
+			"No model available for spawned agents. Set `model` (\"provider/model\") in .pi/council/config.json.",
 		);
 	}
 	return model;
@@ -74,7 +74,7 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 		name: "task_set",
 		label: "Set task",
 		description:
-			"Create the launch-review task from the user's message: the verbatim statement plus the requirements you derived from it. One task at a time; the statement is immutable afterwards.",
+			"Create the council task from the user's message: the verbatim statement plus the requirements you derived from it. One task at a time; the statement is immutable afterwards.",
 		parameters: Type.Object({
 			statement: Type.String({ description: "The user's task statement, verbatim" }),
 			requirements: Type.Array(Type.String(), {
@@ -195,7 +195,7 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 				const spec: ChildSpec = {
 					name: worker.name,
 					systemPrompt: [
-						"You are a worker agent dispatched by the Owner of a launch-review task. Complete your instructions fully and autonomously, then report what you did (and anything the Owner must know) as your final message. You have no memory: your instructions and the context below are everything.",
+						"You are a worker agent dispatched by the Owner of a council task. Complete your instructions fully and autonomously, then report what you did (and anything the Owner must know) as your final message. You have no memory: your instructions and the context below are everything.",
 						"",
 						context,
 					].join("\n"),
