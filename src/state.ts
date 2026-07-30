@@ -546,7 +546,8 @@ export class LaunchStore {
 	}
 
 	appendSpend(entry: SpendEntry): void {
-		const task = this.mustCurrent();
+		const task = this.latest();
+		if (!task) throw new Error("No current or recently closed task for spend attribution.");
 		this.validateSpendEntry(entry, "new spend entry");
 		fs.appendFileSync(path.join(this.taskDir(task.id), "spend.jsonl"), `${JSON.stringify(entry)}\n`);
 	}

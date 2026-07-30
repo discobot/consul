@@ -21,6 +21,7 @@ export interface BoardChild {
 
 export interface BoardSnapshot {
 	taskId?: string;
+	active: boolean;
 	statement: string;
 	requirements: string[];
 	phase: string;
@@ -76,7 +77,7 @@ export function loadCockpitSnapshot(cwd: string, now = Date.now()): BoardSnapsho
 	try {
 		const store = new LaunchStore(cwd);
 		const task = store.latest();
-		if (!task) return { statement: "No active task — send a task through the Owner first", requirements: [], phase: "IDLE", gates: { design: [], implementation: [] }, blockers: [], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: true, errors };
+		if (!task) return { active: false, statement: "No active task — close the board and start one in an Owner session", requirements: [], phase: "IDLE", gates: { design: [], implementation: [] }, blockers: [], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: true, errors };
 		const status = store.readStatus();
 		const activity = store.readActivity();
 		const totals = store.spendTotals();
@@ -85,9 +86,10 @@ export function loadCockpitSnapshot(cwd: string, now = Date.now()): BoardSnapsho
 		const rows = (gate?: StatusGate): BoardVerifier[] => gate?.verifiers.map((verifier) => ({ name: verifier.name, state: stateName(verifier.state), comments: verifier.comments ?? [] })) ?? [];
 		return {
 			taskId: task.id,
+			active: task.status === "active",
 			statement: task.statement,
 			requirements: task.requirements.map((requirement) => requirement.text),
-			phase: status?.phase ?? (task.status === "done" ? "DONE" : task.status === "killed" ? "KILLED" : "UNKNOWN"),
+			phase: task.status === "done" ? "DONE" : task.status === "killed" ? "KILLED" : status?.phase ?? "UNKNOWN",
 			gates: { design: rows(status?.design), implementation: rows(status?.implementation) },
 			blockers: status?.blockers ?? (task.status === "active" ? ["Gate status unavailable until the Owner reconnects"] : []),
 			children: activity?.children.map((child) => ({ name: child.name, status: child.detail ?? child.status })) ?? [],
@@ -99,7 +101,7 @@ export function loadCockpitSnapshot(cwd: string, now = Date.now()): BoardSnapsho
 		};
 	} catch (error) {
 		errors.push((error as Error).message);
-		return { statement: "Task state unavailable", requirements: [], phase: "UNKNOWN", gates: { design: [], implementation: [] }, blockers: ["Canonical task status is unavailable"], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: false, errors };
+		return { active: false, statement: "Task state unavailable", requirements: [], phase: "UNKNOWN", gates: { design: [], implementation: [] }, blockers: ["Canonical task status is unavailable"], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: false, errors };
 	}
 }
 
@@ -130,21 +132,32 @@ function cut(text: string, width: number): string {
 	return `${result}…`;
 }
 
+function splitToken(token: string, width: number): string[] {
+	const parts: string[] = [];
+	let part = "";
+	let used = 0;
+	for (const char of token) {
+		const cells = charWidth(char);
+		if (part && used + cells > Math.max(1, width)) { parts.push(part); part = char; used = cells; }
+		else { part += char; used += cells; }
+	}
+	if (part || parts.length === 0) parts.push(part);
+	return parts;
+}
+
 function wrap(text: string, width: number, prefix = ""): string[] {
-	const value = clean(text);
+	const words = clean(text).split(" ").filter(Boolean);
 	const indent = " ".repeat(displayWidth(prefix));
 	const lines: string[] = [];
 	let lead = prefix;
 	let line = "";
-	let used = displayWidth(lead);
-	for (const char of value) {
-		const cells = charWidth(char);
-		if (line && used + cells > Math.max(1, width)) {
-			lines.push(lead + line);
-			lead = indent;
-			line = char === " " ? "" : char;
-			used = displayWidth(lead) + (char === " " ? 0 : cells);
-		} else { line += char; used += cells; }
+	for (const word of words) {
+		let capacity = Math.max(1, width - displayWidth(lead));
+		if (line && displayWidth(line) + 1 + displayWidth(word) <= capacity) { line += ` ${word}`; continue; }
+		if (line) { lines.push(lead + line); lead = indent; line = ""; capacity = Math.max(1, width - displayWidth(lead)); }
+		const parts = splitToken(word, capacity);
+		for (const part of parts.slice(0, -1)) { lines.push(lead + part); lead = indent; }
+		line = parts.at(-1) ?? "";
 	}
 	lines.push(lead + line);
 	return lines;
@@ -165,15 +178,15 @@ export function renderCockpit(snapshot: BoardSnapshot, width: number): string[] 
 	lines.push(...(snapshot.blockers.length ? snapshot.blockers.flatMap((b) => wrap(b, width, " • ")) : ["  none"]));
 	lines.push("", "Running children");
 	lines.push(...(snapshot.children.length ? snapshot.children.flatMap((c) => wrap(`${c.name}: ${c.status}`, width, " • ")) : ["  none"]));
-	lines.push("", cut(`Spend  $${snapshot.spend.cost.toFixed(4)} · ${snapshot.spend.tokens.toLocaleString("en-US")} tokens · ${snapshot.spend.entries} runs`, width));
+	lines.push("", ...wrap(`$${snapshot.spend.cost.toFixed(4)} · ${snapshot.spend.tokens.toLocaleString("en-US")} tokens · ${snapshot.spend.entries} runs`, width, "Spend  "));
 	if (snapshot.errors.length) lines.push(...snapshot.errors.flatMap((error) => wrap(error, width, "State warning: ")));
 	return lines.map((line) => cut(line, width));
 }
 
 export function renderCockpitPage(snapshot: BoardSnapshot, width: number, height: number, offset = 0, feedback = ""): { lines: string[]; offset: number; maxOffset: number } {
 	const all = renderCockpit(snapshot, width);
-	const controls = cut(snapshot.taskId ? "↑↓ [a]+req [k]kill [q]close" : "[q] close · no active task", width);
-	const footer = feedback ? [cut(feedback, width), controls] : [controls];
+	const controlText = snapshot.active ? "[a] append requirement · [k] kill task · [q/Esc] close" : "[q/Esc] close · task controls unavailable";
+	const footer = [...(feedback ? wrap(feedback, width) : []), ...wrap(controlText, width)];
 	const bodyHeight = Math.max(1, height - footer.length);
 	const maxOffset = Math.max(0, all.length - bodyHeight);
 	const safeOffset = Math.max(0, Math.min(offset, maxOffset));
@@ -428,13 +441,13 @@ export default function cockpit(pi: ExtensionAPI): void {
 					if (["j", "J", "\u001b[B"].includes(data)) { scroll += 1; tui.requestRender(); return; }
 					if (["u", "U", "\u001b[A"].includes(data)) { scroll = Math.max(0, scroll - 1); tui.requestRender(); return; }
 					if (data === "q" || data === "Q" || data === "\u001b") { cleanup?.(); done(undefined); ctx.shutdown(); return; }
-					if (snapshot.taskId && (data === "a" || data === "A")) void ctx.ui.input("Append requirement", "The Owner will record and propagate this requirement").then((text) => {
+					if (snapshot.active && (data === "a" || data === "A")) void ctx.ui.input("Append requirement", "The Owner will record and propagate this requirement").then((text) => {
 						if (!text?.trim()) return;
 						feedback = "Requirement sending…";
 						tui.requestRender();
 						supervisor.append(text.trim()).then((message) => { feedback = message; tui.requestRender(); });
 					});
-					if (snapshot.taskId && (data === "k" || data === "K")) void ctx.ui.confirm("Kill task?", "This permanently ends the task but keeps all records.").then((confirmed) => {
+					if (snapshot.active && (data === "k" || data === "K")) void ctx.ui.confirm("Kill task?", "This permanently ends the task but keeps all records.").then((confirmed) => {
 						if (confirmed) supervisor.killTask().then((message) => { feedback = message; tui.requestRender(); });
 					});
 				},

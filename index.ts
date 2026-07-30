@@ -50,7 +50,7 @@ export default function (pi: ExtensionAPI) {
 		const key = `${message.timestamp}:${message.provider}:${message.model}:${message.responseId ?? ""}`;
 		if (ownerSpendSeen.has(key)) return;
 		const store = storeFor(ctx.cwd);
-		if (!store.current()) return;
+		if (!store.latest()) return;
 		ownerSpendSeen.add(key);
 		store.appendSpend({
 			at: new Date(message.timestamp ?? Date.now()).toISOString(), kind: "owner", name: "Owner",

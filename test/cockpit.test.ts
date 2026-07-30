@@ -96,9 +96,19 @@ test("render is a bounded, complete task board with visible controls", () => {
 	assert.equal(lines.filter((line) => line.includes("1. ")).length, 1, "wrapped requirements are numbered once");
 	const page = renderCockpitPage({ ...loadCockpitSnapshot(cwd), requirements: Array.from({ length: 30 }, (_, i) => `requirement ${i}`) }, 40, 12, 999, "Requirement accepted by Owner");
 	assert.equal(page.lines.length, 12);
-	assert.match(page.lines.at(-1)!, /\+req.*kill.*close/);
-	assert.equal(page.lines.at(-2), "Requirement accepted by Owner", "feedback stays fixed above controls");
+	assert.match(page.lines.slice(-5).join(" "), /Requirement accepted by Owner.*append requirement.*kill task.*close/, "feedback and controls stay fixed");
 	assert.ok(page.maxOffset > 0);
+	const narrow = renderCockpitPage({ ...loadCockpitSnapshot(cwd), spend: { cost: 1.25, tokens: 12345, entries: 9 } }, 20, 14, 0, "Requirement delivery failed; retry after reconnect");
+	const narrowText = narrow.lines.join(" ");
+	assert.match(narrowText, /delivery failed/);
+	assert.match(narrowText, /close/);
+	const narrowFull = renderCockpit({ ...loadCockpitSnapshot(cwd), spend: { cost: 1.25, tokens: 12345, entries: 9 } }, 20).join(" ");
+	assert.match(narrowFull, /12,345 tokens/);
+	assert.match(narrowFull, /9 runs/);
+	const taskFile = path.join(cwd, ".pi", "council", "tasks", "abc123", "task.json");
+	const closed = JSON.parse(fs.readFileSync(taskFile, "utf8")); closed.status = "done"; closed.closedAt = "now"; fs.writeFileSync(taskFile, JSON.stringify(closed));
+	const closedPage = renderCockpitPage(loadCockpitSnapshot(cwd), 50, 12);
+	assert.doesNotMatch(closedPage.lines.join(" "), /append requirement|kill task/);
 	fs.rmSync(cwd, { recursive: true, force: true });
 });
 
