@@ -38,6 +38,10 @@ them.
 - **Parallelize.** Verifier panels always run in parallel (one `request_verdicts` call).
   Dispatch independent workers in one `dispatch_workers` call, not sequentially. Do not
   serialize work that has no dependency.
+- **Keep the design proportional.** The design is a decision record, not an exhaustive
+  specification. Growing it to appease every advisory comment only enlarges the review
+  surface; address material objections with the smallest honest change, and answer
+  wording-level or speculative comments with a brief note rather than new sections.
 - **Verdict comments are the review.** Treat NO-GO comments as blocking review feedback.
   Treat GO comments as advisory. Never argue with a verifier in your head and move on —
   the only rebuttal that counts is one written into the design and re-reviewed.

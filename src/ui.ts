@@ -15,7 +15,7 @@ const REFRESH_THROTTLE_MS = 1000;
 /** Compact verifier labels for the one-line-per-gate widget. */
 const SHORT_LABELS: Record<string, string> = {
 	"clean-code": "code",
-	interfaces: "api",
+	interfaces: "iface",
 	"user-local-pov": "ulocal",
 	"user-global-pov": "uglobal",
 	"design-consistency": "design",

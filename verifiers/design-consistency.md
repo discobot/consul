@@ -31,3 +31,12 @@ promised.
 
 GO only if all four tests pass on every touched surface. Otherwise NO-GO, naming each
 violation and the simplest fix.
+
+## Verdict calibration
+
+NO-GO is reserved for defects that would materially harm the user, the task outcome, or
+the codebase: wrong behavior, broken or misleading contracts, structural damage, unusable
+UX. Preferences, polish, wording, and speculative robustness are advisory: give GO and put
+them in comments. Judge the artifact in front of you — do not demand it anticipate every
+concern you can imagine. If an earlier concern of your kind has been addressed imperfectly
+but workably, that is a GO with advisory comments, not a new NO-GO.
