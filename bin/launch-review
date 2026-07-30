@@ -1,0 +1,37 @@
+#!/usr/bin/env node
+/**
+ * launch-review launcher: starts pi with the launch-review extension and its
+ * custom TUI skin preloaded. All arguments pass through to pi.
+ *
+ * pi is resolved from $LAUNCH_REVIEW_PI (a pi binary or a cli.js/cli.ts entry),
+ * falling back to `pi` on PATH.
+ */
+
+import { spawnSync } from "node:child_process";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const extensionArgs = ["-e", path.join(root, "index.ts"), "-e", path.join(root, "src", "tui-skin.ts")];
+const passThrough = process.argv.slice(2);
+
+const override = process.env.LAUNCH_REVIEW_PI;
+const invocation = override
+	? /\.(js|ts|mjs)$/.test(override)
+		? { command: process.execPath, args: [override] }
+		: { command: override, args: [] }
+	: { command: "pi", args: [] };
+
+const result = spawnSync(invocation.command, [...invocation.args, ...extensionArgs, ...passThrough], {
+	stdio: "inherit",
+});
+
+if (result.error) {
+	const hint =
+		override === undefined
+			? "Could not run `pi`. Install it (npm i -g @earendil-works/pi-coding-agent) or point LAUNCH_REVIEW_PI at a pi binary or cli.js."
+			: `Could not run LAUNCH_REVIEW_PI (${override}).`;
+	console.error(`launch-review: ${hint}\n${result.error.message}`);
+	process.exit(1);
+}
+process.exit(result.status ?? 0);

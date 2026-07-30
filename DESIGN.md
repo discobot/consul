@@ -164,6 +164,14 @@ survives session restarts (`pi` resumes are safe — state is on disk, not in co
 - Every subprocess result streams into the tool-call renderer, so the user sees live
   per-verifier / per-worker progress inside the session, and the widget mirrors it.
 
+## Launcher
+
+`bin/launch-review` is the dedicated entry point: it starts pi with the extension plus a
+custom TUI skin (`src/tui-skin.ts`) — a branded header showing the active task, id, phase,
+and requirement count at all times, a launch-review terminal title, and a
+committee-flavored working indicator. All arguments pass through to pi; the pi entry is
+resolved from `$LAUNCH_REVIEW_PI` or PATH.
+
 ## Self-verification (acceptance test for this project)
 
 Run pi with this extension inside this repo and set the task: *"Verify that launch-review

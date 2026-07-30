@@ -11,6 +11,17 @@ See [DESIGN.md](DESIGN.md) for the full design.
 
 ## Usage
 
+The dedicated launcher starts pi with the extension and the launch-review TUI skin
+(branded header with the live task, committee working indicator) preloaded:
+
+```bash
+launch-review/bin/launch-review            # uses `pi` from PATH
+LAUNCH_REVIEW_PI=/path/to/pi/dist/cli.js launch-review/bin/launch-review
+```
+
+Any arguments pass through to pi (`--model`, `--provider`, …). Alternatively load the
+extension into a plain pi session:
+
 ```bash
 # one-off
 pi -e /path/to/launch-review/index.ts
