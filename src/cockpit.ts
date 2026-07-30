@@ -42,27 +42,6 @@ const SLEEP_JUMP_MS = 30_000;
 const HEARTBEAT_MS = 5_000;
 const INACTIVITY_MS = 20_000;
 
-function object(value: unknown): JsonObject | undefined {
-	return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
-}
-
-/** Reads complete JSONL records and deliberately ignores a torn final record. */
-export function parseJsonl(raw: string): JsonObject[] {
-	const lines = raw.split("\n");
-	const complete = raw.endsWith("\n") ? lines : lines.slice(0, -1);
-	const result: JsonObject[] = [];
-	for (const line of complete) {
-		if (!line.trim()) continue;
-		try {
-			const value = object(JSON.parse(line));
-			if (value) result.push(value);
-		} catch {
-			// A bad/torn record is not canonical state; the engine can re-source it.
-		}
-	}
-	return result;
-}
-
 function stateName(value: unknown): BoardState {
 	const normalized = String(value ?? "pending").toLowerCase();
 	if (normalized === "go") return "GO";
@@ -166,7 +145,8 @@ function wrap(text: string, width: number, prefix = ""): string[] {
 /** Plain, deterministic board rendering; runtime theming is intentionally optional. */
 export function renderCockpit(snapshot: BoardSnapshot, width: number): string[] {
 	width = Math.max(1, width);
-	const lines: string[] = [cut(`◆ council cockpit  #${snapshot.taskId ?? "—"}  ${snapshot.phase}${snapshot.connected ? "" : "  · reconnecting"}`, width)];
+	const lines: string[] = [...wrap("◆ council cockpit", width), ...wrap(`#${snapshot.taskId ?? "—"}`, width), ...wrap(`Phase: ${snapshot.phase}`, width)];
+	if (!snapshot.connected && snapshot.taskId) lines.push(...wrap("Connection: reconnecting", width));
 	lines.push(cut("─".repeat(width), width), ...wrap(snapshot.statement, width, "Statement: "));
 	lines.push("Requirements");
 	lines.push(...(snapshot.requirements.length ? snapshot.requirements.flatMap((r, i) => wrap(r, width, ` ${i + 1}. `)) : ["  (none recorded)"]));
@@ -185,12 +165,19 @@ export function renderCockpit(snapshot: BoardSnapshot, width: number): string[] 
 
 export function renderCockpitPage(snapshot: BoardSnapshot, width: number, height: number, offset = 0, feedback = ""): { lines: string[]; offset: number; maxOffset: number } {
 	const all = renderCockpit(snapshot, width);
-	const controlText = snapshot.active ? "[a] append requirement · [k] kill task · [q/Esc] close" : "[q/Esc] close · task controls unavailable";
-	const footer = [...(feedback ? wrap(feedback, width) : []), ...wrap(controlText, width)];
-	const bodyHeight = Math.max(1, height - footer.length);
+	const controls = wrap(snapshot.active ? "[a] add · [k] kill · [q] close" : "[q] close", width);
+	let feedbackLines = feedback ? wrap(feedback, width) : [];
+	const provisionalBody = Math.max(0, height - controls.length - feedbackLines.length - 1);
+	const provisionalMax = Math.max(0, all.length - provisionalBody);
+	const safeOffset = Math.max(0, Math.min(offset, provisionalMax));
+	const scroll = wrap(`↑/↓ scroll · ${safeOffset + 1}/${Math.max(1, all.length)}`, width);
+	const maxFeedback = Math.max(0, height - controls.length - scroll.length - 1);
+	feedbackLines = feedbackLines.slice(0, maxFeedback);
+	const footer = [...feedbackLines, ...scroll, ...controls];
+	const bodyHeight = Math.max(0, height - footer.length);
 	const maxOffset = Math.max(0, all.length - bodyHeight);
-	const safeOffset = Math.max(0, Math.min(offset, maxOffset));
-	return { lines: [...all.slice(safeOffset, safeOffset + bodyHeight), ...footer], offset: safeOffset, maxOffset };
+	const finalOffset = Math.max(0, Math.min(safeOffset, maxOffset));
+	return { lines: [...all.slice(finalOffset, finalOffset + bodyHeight), ...footer].slice(0, height), offset: finalOffset, maxOffset };
 }
 
 export interface RestartState { attempts: number; lastStartedAt?: number }
@@ -198,7 +185,7 @@ export interface RestartState { attempts: number; lastStartedAt?: number }
 export function appendRequirementRpcCommand(text: string): JsonObject {
 	return {
 		type: "prompt",
-		message: `Append this user requirement exactly through council's task_requirements_add tool, propagate it through design and implementation, and re-source stale verdicts: ${JSON.stringify(text)}`,
+		message: text,
 		streamingBehavior: "followUp",
 	};
 }

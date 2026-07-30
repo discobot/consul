@@ -380,7 +380,16 @@ export class LaunchStore {
 		}
 	}
 
-	current(): TaskRecord | null { return this.taskFromPointer(this.currentFile, "current-task"); }
+	current(): TaskRecord | null {
+		const task = this.taskFromPointer(this.currentFile, "current-task");
+		if (task && task.status !== "active") {
+			// Idempotent recovery for a crash after terminal task.json was committed.
+			this.atomicWrite(this.lastFile, `${task.id}\n`);
+			this.atomicWrite(this.currentFile, "\n");
+			return null;
+		}
+		return task;
+	}
 	latest(): TaskRecord | null { return this.current() ?? this.taskFromPointer(this.lastFile, "last-task"); }
 
 	private atomicWrite(file: string, content: string): void {
@@ -649,7 +658,8 @@ export class LaunchStore {
 		task.closedAt = new Date().toISOString();
 		if (summary) task.summary = summary;
 		this.saveTask(task);
-		const existingStatus = this.readStatus();
+		let existingStatus: StatusSnapshot | null = null;
+		try { existingStatus = this.readStatus(); } catch { /* terminal state remains canonical even if a projection is corrupt */ }
 		if (existingStatus) {
 			const finalStatus = { ...existingStatus, phase: status === "done" ? "DONE" as const : "KILLED" as const, generatedAt: task.closedAt!, heartbeatAt: task.closedAt! };
 			this.atomicWrite(path.join(this.taskDir(task.id), "status.json"), `${JSON.stringify(finalStatus, null, "\t")}\n`);

@@ -17,6 +17,7 @@ import "./children.test.ts";
 import "./cockpit.test.ts";
 import "./presentation.test.ts";
 import "./state.test.ts";
+import "./terminal-recovery.test.ts";
 
 function makeRepo(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "council-test-"));

@@ -11,7 +11,6 @@ import {
 	killTaskRpcCommand,
 	loadCockpitSnapshot,
 	nextRestart,
-	parseJsonl,
 	renderCockpit,
 	renderCockpitPage,
 } from "../src/cockpit.ts";
@@ -96,15 +95,20 @@ test("render is a bounded, complete task board with visible controls", () => {
 	assert.equal(lines.filter((line) => line.includes("1. ")).length, 1, "wrapped requirements are numbered once");
 	const page = renderCockpitPage({ ...loadCockpitSnapshot(cwd), requirements: Array.from({ length: 30 }, (_, i) => `requirement ${i}`) }, 40, 12, 999, "Requirement accepted by Owner");
 	assert.equal(page.lines.length, 12);
-	assert.match(page.lines.slice(-5).join(" "), /Requirement accepted by Owner.*append requirement.*kill task.*close/, "feedback and controls stay fixed");
+	assert.match(page.lines.slice(-6).join(" "), /Requirement accepted by Owner.*scroll.*\[a\] add.*\[k\] kill.*\[q\] close/, "feedback, scroll guidance, and controls stay fixed");
 	assert.ok(page.maxOffset > 0);
 	const narrow = renderCockpitPage({ ...loadCockpitSnapshot(cwd), spend: { cost: 1.25, tokens: 12345, entries: 9 } }, 20, 14, 0, "Requirement delivery failed; retry after reconnect");
 	const narrowText = narrow.lines.join(" ");
 	assert.match(narrowText, /delivery failed/);
 	assert.match(narrowText, /close/);
+	assert.ok(narrow.lines.length <= 14);
 	const narrowFull = renderCockpit({ ...loadCockpitSnapshot(cwd), spend: { cost: 1.25, tokens: 12345, entries: 9 } }, 20).join(" ");
 	assert.match(narrowFull, /12,345 tokens/);
 	assert.match(narrowFull, /9 runs/);
+	const narrowHeader = renderCockpit(loadCockpitSnapshot(cwd), 20).join(" ");
+	assert.match(narrowHeader, /abc123/);
+	assert.match(narrowHeader, /UNKNOWN/);
+	assert.match(narrowHeader, /reconnecting/);
 	const taskFile = path.join(cwd, ".pi", "council", "tasks", "abc123", "task.json");
 	const closed = JSON.parse(fs.readFileSync(taskFile, "utf8")); closed.status = "done"; closed.closedAt = "now"; fs.writeFileSync(taskFile, JSON.stringify(closed));
 	const closedPage = renderCockpitPage(loadCockpitSnapshot(cwd), 50, 12);
@@ -122,8 +126,7 @@ test("missing status never promotes historical verdicts to fresh gate state", ()
 	fs.rmSync(cwd, { recursive: true, force: true });
 });
 
-test("JSONL framing uses LF only and ignores a torn final disk record", () => {
-	assert.deepEqual(parseJsonl('{"ok":1}\n{"torn":'), [{ ok: 1 }]);
+test("RPC JSONL framing uses LF only", () => {
 	const decoder = new JsonlDecoder();
 	assert.deepEqual(decoder.push(Buffer.from('{"message":"a\u2028b"}')), []);
 	assert.deepEqual(decoder.push("\r\n"), ['{"message":"a b"}']);
@@ -133,8 +136,7 @@ test("controls produce Owner RPC prompts rather than file mutations", () => {
 	const append = appendRequirementRpcCommand("retain exact text\nwith newline");
 	assert.equal(append.type, "prompt");
 	assert.equal(append.streamingBehavior, "followUp");
-	assert.match(String(append.message), /task_requirements_add/);
-	assert.match(String(append.message), /retain exact text\\nwith newline/);
+	assert.equal(append.message, "retain exact text\nwith newline");
 	assert.deepEqual(killTaskRpcCommand(), { type: "prompt", message: "/task-kill" });
 });
 

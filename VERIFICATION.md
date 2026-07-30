@@ -2,7 +2,7 @@
 
 Completed on `council/design-compliance-audit`:
 
-- `node --test test/unit.ts` — **31 passed, 0 failed** after implementation-review fixes.
+- `node --test test/unit.ts` — **32 passed, 0 failed** after implementation-review fixes.
 - `node --check` for `index.ts`, `src/*.ts`, `test/*.ts`, and `bin/council` — passed.
 - Owner extension load through a real pi RPC process — passed.
 - `bin/council --version` and `bin/council board --version` with the configured pi entry — passed.

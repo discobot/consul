@@ -41,7 +41,8 @@ Then, in a git repository with at least one commit:
 - **Watch progress** in the status widget above the editor, or with `/task` for the full
   report (requirements, per-verifier gate states, blocking comments, and spend), or run
   `council board` for the dedicated cockpit. The board reads disk state, supervises an RPC
-  Owner, and sends append/kill actions through that Owner—it never edits task files.
+  Owner, and sends append/kill actions through that Owner—it never edits task files. Use
+  ↑/↓ (or j/u) to scroll, `a` to append, `k` to kill with confirmation, and q/Esc to close.
   State is plain files under `.pi/council/tasks/<id>/`, including verdict, activity,
   status, and spend projections.
 
@@ -63,8 +64,8 @@ they fall back to code inspection when browser tooling is unavailable.
 ```json
 {
 	"model": "provider/model-for-all-spawned-agents",
-	"verifierModel": "override-for-verifiers",
-	"workerModel": "override-for-workers",
+	"verifierModel": "provider/default-verifier-model",
+	"workerModel": "provider/default-worker-model",
 	"verifierModels": { "clean-code": "provider/specialized-model" },
 	"concurrency": 8,
 	"timeoutMinutes": 20,
