@@ -201,7 +201,9 @@ test("activity and status projections are atomically persisted and malformed sta
 	assert.equal(store.latest()?.status, "done");
 	assert.equal(store.readStatus()?.phase, "DONE");
 	store.appendSpend({ at: "after-close", kind: "owner", name: "Owner", model: "provider/model", tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, costUsd: 0.01, status: "ok" });
+	store.refreshStatusSpend();
 	assert.equal(store.spendTotals().byKind.owner.runs, 1, "terminal Owner response is attributed to the latest task");
+	assert.equal(store.readStatus()?.spend.byKind.owner.runs, 1, "terminal status spend stays current");
 	assert.equal(fs.readdirSync(store.taskDir(task.id)).some((name) => name.includes(".tmp-")), false);
 	fs.writeFileSync(path.join(store.taskDir(task.id), "status.json"), "not-json");
 	assert.throws(() => store.readStatus(), /Cannot load council status.json/);

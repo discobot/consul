@@ -626,6 +626,14 @@ export class LaunchStore {
 		return this.readProjection<StatusSnapshot>("status.json");
 	}
 
+	refreshStatusSpend(): void {
+		const task = this.latest();
+		const status = this.readStatus();
+		if (!task || !status) return;
+		const updated = { ...status, spend: this.spendTotals(), generatedAt: new Date().toISOString() };
+		this.atomicWrite(path.join(this.taskDir(task.id), "status.json"), `${JSON.stringify(updated, null, "\t")}\n`);
+	}
+
 	private readProjection<T extends { taskId: string }>(name: string): T | null {
 		const task = this.latest();
 		if (!task) return null;

@@ -59,6 +59,7 @@ export default function (pi: ExtensionAPI) {
 			costUsd: message.usage.cost?.total ?? 0,
 			status: message.stopReason === "error" ? "failed" : message.stopReason === "aborted" ? "aborted" : "ok",
 		});
+		store.refreshStatusSpend();
 		ui.refresh(ctx);
 	});
 

@@ -485,15 +485,25 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 			const changes = await store.worktreeChanges();
 			if (changes.length) throw new Error(`Completion requires a clean reviewed worktree. Commit or remove:\n${changes.join("\n")}`);
 			const failures: string[] = [];
+			const finalReports = new Map<Gate, { report: GateReport; defs: VerifierDef[] }>();
 			for (const gate of ["design", "implementation"] as Gate[]) {
 				const defs = verifiersForGate(all, gate);
 				const report = await store.gateReport(gate, defs.map((v) => v.name), fingerprints(defs));
+				finalReports.set(gate, { report, defs });
 				if (!report.holds) failures.push(`${gateSummary(report)}\n${blockersText(report)}`);
 			}
 			if (failures.length > 0) {
 				throw new Error(`Refused — gates do not hold.\n\n${failures.join("\n\n")}`);
 			}
 			if (!params.summary.trim()) throw new Error("Completion summary must not be empty.");
+			const taskBeforeClose = store.mustCurrent();
+			const project = (gate: Gate) => {
+				const { report, defs } = finalReports.get(gate)!;
+				const definitions = new Map(defs.map((def) => [def.name, def.fingerprint]));
+				return { hash: report.hash, holds: report.holds, verifiers: report.verifiers.map((verifier) => ({ name: verifier.name, fingerprint: definitions.get(verifier.name)!, state: verifier.state, ...(verifier.verdict?.comments.length ? { comments: verifier.verdict.comments } : {}) })) };
+			};
+			const now = new Date().toISOString();
+			store.writeStatus({ taskId: taskBeforeClose.id, phase: "IMPL_GATE", generatedAt: now, heartbeatAt: now, pendingInputIds: [], blockers: [], spend: store.spendTotals(), design: project("design"), implementation: project("implementation") });
 			const task = store.close("done", params.summary.trim());
 			live.onChange(ctx);
 			const record = `.pi/council/tasks/${task.id}/`;
