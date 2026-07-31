@@ -112,15 +112,12 @@ export default function (pi: ExtensionAPI) {
 		if (readOnlyTools.has(event.toolName)) return;
 		if (activeProtected) return { block: true, reason: `Blocked ${event.toolName}: gate/completion verification is in progress.` };
 		if (councilTools.has(event.toolName)) { activeMutations.add(callId); return; }
+		// bash is the Owner's inspection surface: never gate it (the Owner prompt keeps
+		// implementation out of it), but serialize it against verdict sourcing above.
+		if (event.toolName === "bash") { activeMutations.add(callId); return; }
 		const store = storeFor(ctx.cwd);
 		const task = store.current();
-		if (event.toolName === "bash") {
-			const command = String((event.input as { command?: string }).command ?? "").trim();
-			if (/^git (?:switch -c|checkout -b|switch|checkout) (?!-)[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(command)) { activeMutations.add(callId); return; }
-		}
-		if (!task && store.readInitialInput()) {
-			return { block: true, reason: `Blocked ${event.toolName}: finalize the captured task with task_set before mutation.` };
-		}
+		// Before task_set the Owner prompt is the only guard: exploration must stay unhindered.
 		if (!task) return;
 		const all = discoverVerifiers(ctx.cwd);
 		const defs = verifiersForGate(all, "design");
