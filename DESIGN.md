@@ -28,7 +28,11 @@ verdicts.
    parallel; independent workers run in parallel.
 7. **The process is enforced by code, not by prompt.** The state machine lives in the
    extension. The Owner cannot advance phases by rhetoric; `gate_status` / phase
-   transitions recompute hashes and verify verdicts mechanically.
+   transitions recompute hashes and verify verdicts mechanically. One deliberate
+   exception: `bash` is the Owner's inspection surface and is never gated — it is only
+   serialized against verdict sourcing. The Owner prompt, not the harness, keeps
+   implementation out of bash before a gate holds; gate and base-branch blocks apply to
+   the mutation tools (edit, write).
 
 ## Roles
 
@@ -201,6 +205,15 @@ resolved from `$COUNCIL_PI` or PATH.
 status/task/verdict/activity/spend contract, renders the full task board, and supervises a
 session-resuming RPC Owner. Append and kill controls go through Owner RPC; the cockpit does
 not mutate canonical task files.
+
+The board is a full-screen themed TUI: a branded header carries the task id, lifecycle
+phase, and owner liveness; bordered panels carry the task statement and requirements, both
+gates (side by side from 64 columns, stacked below), blockers, running children, and
+spend; a footer pins feedback, the scroll position, and key hints. Verifier states paint
+as ✓ GO / ✗ NO-GO / ⚠ stale / ○ pending, with a spinner animating reviewing verifiers and
+running children. Rendering is dependency-free and deterministic — styling flows through a
+palette shim (the identity palette renders plain text for tests), layout is computed on
+plain text before painting, and every line is bounded to the terminal width at any size.
 
 ## Self-verification (acceptance test for this project)
 

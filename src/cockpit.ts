@@ -142,42 +142,179 @@ function wrap(text: string, width: number, prefix = ""): string[] {
 	return lines;
 }
 
-/** Plain, deterministic board rendering; runtime theming is intentionally optional. */
-export function renderCockpit(snapshot: BoardSnapshot, width: number): string[] {
-	width = Math.max(1, width);
-	const lines: string[] = [...wrap("◆ council cockpit", width), ...wrap(`#${snapshot.taskId ?? "—"}`, width), ...wrap(`Phase: ${snapshot.phase}`, width)];
-	if (!snapshot.connected && snapshot.taskId) lines.push(...wrap("Connection: reconnecting", width));
-	lines.push(cut("─".repeat(width), width), ...wrap(snapshot.statement, width, "Statement: "));
-	lines.push("Requirements");
-	lines.push(...(snapshot.requirements.length ? snapshot.requirements.flatMap((r, i) => wrap(r, width, ` ${i + 1}. `)) : ["  (none recorded)"]));
-	for (const [gate, rows] of [["DESIGN GATE", snapshot.gates.design], ["IMPLEMENTATION GATE", snapshot.gates.implementation]] as const) {
-		lines.push("", cut(gate, width));
-		lines.push(...(rows.length ? rows.flatMap((row) => [...wrap(`${row.state.padEnd(12)} ${row.name}`, width, " "), ...row.comments.flatMap((c) => wrap(c, width, "   ↳ "))]) : ["  (verdicts pending)"]));
-	}
-	lines.push("", "Blocking comments");
-	lines.push(...(snapshot.blockers.length ? snapshot.blockers.flatMap((b) => wrap(b, width, " • ")) : ["  none"]));
-	lines.push("", "Running children");
-	lines.push(...(snapshot.children.length ? snapshot.children.flatMap((c) => wrap(`${c.name}: ${c.status}`, width, " • ")) : ["  none"]));
-	lines.push("", ...wrap(`$${snapshot.spend.cost.toFixed(4)} · ${snapshot.spend.tokens.toLocaleString("en-US")} tokens · ${snapshot.spend.entries} runs`, width, "Spend  "));
-	if (snapshot.errors.length) lines.push(...snapshot.errors.flatMap((error) => wrap(error, width, "State warning: ")));
-	return lines.map((line) => cut(line, width));
+// ── Themed full-screen board ──────────────────────────────────────────────────
+// Rendering stays dependency-free (testable under bare `node --test`): styling
+// goes through a palette shim, and the identity palette renders plain text.
+
+export type PaletteColor = "accent" | "success" | "error" | "warning" | "muted" | "dim";
+export interface Palette { fg(color: PaletteColor, text: string): string; bold(text: string): string }
+export const PLAIN_PALETTE: Palette = { fg: (_color, text) => text, bold: (text) => text };
+
+export interface Span { text: string; color?: PaletteColor; bold?: boolean }
+
+const SPINNER = ["◇", "◈", "◆", "◈"];
+const BORDER: PaletteColor = "dim";
+const STATE_STYLE: Record<BoardState, { icon: string; color: PaletteColor }> = {
+	GO: { icon: "✓", color: "success" },
+	"NO-GO": { icon: "✗", color: "error" },
+	stale: { icon: "⚠", color: "warning" },
+	pending: { icon: "○", color: "muted" },
+	reviewing: { icon: "◈", color: "accent" },
+};
+
+function span(text: string, color?: PaletteColor, bold?: boolean): Span { return { text, color, bold }; }
+function spansWidth(spans: Span[]): number { return spans.reduce((sum, part) => sum + displayWidth(part.text), 0); }
+
+function paint(spans: Span[], palette: Palette): string {
+	return spans.map((part) => {
+		let text = part.text;
+		if (part.bold) text = palette.bold(text);
+		if (part.color) text = palette.fg(part.color, text);
+		return text;
+	}).join("");
 }
 
-export function renderCockpitPage(snapshot: BoardSnapshot, width: number, height: number, offset = 0, feedback = ""): { lines: string[]; offset: number; maxOffset: number } {
-	const all = renderCockpit(snapshot, width);
-	const controls = wrap(snapshot.active ? "[a] add · [k] kill · [q] close" : "[q] close", width);
-	let feedbackLines = feedback ? wrap(feedback, width) : [];
-	const provisionalBody = Math.max(0, height - controls.length - feedbackLines.length - 1);
-	const provisionalMax = Math.max(0, all.length - provisionalBody);
-	const safeOffset = Math.max(0, Math.min(offset, provisionalMax));
-	const scroll = wrap(`↑/↓ scroll · ${safeOffset + 1}/${Math.max(1, all.length)}`, width);
-	const maxFeedback = Math.max(0, height - controls.length - scroll.length - 1);
-	feedbackLines = feedbackLines.slice(0, maxFeedback);
-	const footer = [...feedbackLines, ...scroll, ...controls];
-	const bodyHeight = Math.max(0, height - footer.length);
-	const maxOffset = Math.max(0, all.length - bodyHeight);
-	const finalOffset = Math.max(0, Math.min(safeOffset, maxOffset));
-	return { lines: [...all.slice(finalOffset, finalOffset + bodyHeight), ...footer].slice(0, height), offset: finalOffset, maxOffset };
+function fitSpans(spans: Span[], width: number): Span[] {
+	if (spansWidth(spans) <= width) return spans;
+	const fitted: Span[] = [];
+	let used = 0;
+	for (const part of spans) {
+		const partWidth = displayWidth(part.text);
+		if (used + partWidth <= width) { fitted.push(part); used += partWidth; continue; }
+		fitted.push({ ...part, text: cut(part.text, width - used) });
+		break;
+	}
+	return fitted;
+}
+
+/** Wrapped rows where the first row's prefix carries its own tint. */
+function prefixedRows(text: string, width: number, prefix: string, prefixColor?: PaletteColor, textColor?: PaletteColor): Span[][] {
+	return wrap(text, width, prefix).map((line, index) => index === 0
+		? [span(line.slice(0, prefix.length), prefixColor), span(line.slice(prefix.length), textColor)]
+		: [span(line, textColor)]);
+}
+
+/** Greedy cell flow with a muted separator; cells too wide for one row are cut, never dropped. */
+function packSpanCells(cells: Span[][], width: number, separator = " · "): Span[][] {
+	const separatorWidth = displayWidth(separator);
+	const rows: Span[][] = [];
+	let row: Span[] = [];
+	let used = 0;
+	for (const cell of cells) {
+		const cellWidth = spansWidth(cell);
+		if (row.length && used + separatorWidth + cellWidth > width) { rows.push(row); row = []; used = 0; }
+		if (row.length) { row.push(span(separator, "muted")); used += separatorWidth; }
+		const fitted = fitSpans(cell, Math.max(1, width - used));
+		row.push(...fitted);
+		used += spansWidth(fitted);
+	}
+	if (row.length) rows.push(row);
+	return rows;
+}
+
+function panel(title: Span[], rows: Span[][], width: number, palette: Palette, badge: Span[] = []): string[] {
+	if (width < 12) return [fitSpans(title, width), ...rows.map((row) => fitSpans(row, width))].map((row) => paint(row, palette));
+	const inner = width - 4;
+	// A badge that cannot leave room for at least one title cell is dropped, never overflowed.
+	const shown = badge.length && spansWidth(badge) <= width - 9 ? badge : [];
+	const titleBudget = Math.max(1, shown.length ? width - 8 - spansWidth(shown) : width - 5);
+	const titleFit = fitSpans(title, titleBudget);
+	const fill = "─".repeat(Math.max(0, titleBudget - spansWidth(titleFit)));
+	const top: Span[] = [span("╭─ ", BORDER), ...titleFit, span(" ", BORDER), span(fill, BORDER), ...(shown.length ? [span(" "), ...shown, span(" ─", BORDER)] : []), span("╮", BORDER)];
+	const body = (rows.length ? rows : [[span("")]]).map((row) => {
+		const fitted = fitSpans(row, inner);
+		return [span("│ ", BORDER), ...fitted, span(" ".repeat(Math.max(0, inner - spansWidth(fitted)))), span(" │", BORDER)];
+	});
+	return [top, ...body, [span(`╰${"─".repeat(width - 2)}╯`, BORDER)]].map((row) => paint(row, palette));
+}
+
+function gatePanel(name: string, rows: BoardVerifier[], width: number, palette: Palette, frame: number): string[] {
+	const inner = Math.max(1, width - 4);
+	const go = rows.filter((row) => row.state === "GO").length;
+	const badge: Span[] = rows.length === 0 ? [] : go === rows.length
+		? [span("✓ HOLDS", "success", true)]
+		: [span(`${go}/${rows.length} GO`, go > 0 ? "warning" : "muted")];
+	const body: Span[][] = rows.length
+		? rows.flatMap((row) => {
+			const style = STATE_STYLE[row.state];
+			const icon = row.state === "reviewing" ? SPINNER[frame % SPINNER.length] : style.icon;
+			const label: Span[] = [span(icon, style.color, true), span(" "), span(cut(row.name, Math.max(1, inner - 2)), row.state === "NO-GO" ? "error" : undefined)];
+			return [label, ...row.comments.flatMap((comment) => wrap(comment, inner, "  ↳ ").map((line) => [span(line, "muted")]))];
+		})
+		: [[span("(verdicts pending)", "muted")]];
+	return panel([span(name, undefined, true)], body, width, palette, badge);
+}
+
+export function renderHeader(snapshot: BoardSnapshot, width: number, palette: Palette = PLAIN_PALETTE, frame = 0): string[] {
+	width = Math.max(1, width);
+	const phaseColor: PaletteColor = snapshot.phase === "DONE" ? "success" : snapshot.phase === "KILLED" ? "error" : snapshot.phase === "IDLE" ? "muted" : "warning";
+	const cells: Span[][] = [[span("◆ council cockpit", "accent", true)]];
+	if (snapshot.taskId) cells.push([span(`#${snapshot.taskId}`, "warning")]);
+	cells.push([span(snapshot.phase, phaseColor, true)]);
+	if (snapshot.taskId) cells.push(snapshot.connected ? [span("● live", "success")] : [span(`${SPINNER[frame % SPINNER.length]} reconnecting…`, "warning")]);
+	return [...packSpanCells(cells, width).map((row) => paint(row, palette)), paint([span("─".repeat(width), BORDER)], palette)];
+}
+
+export function renderPanels(snapshot: BoardSnapshot, width: number, palette: Palette = PLAIN_PALETTE, frame = 0): string[] {
+	width = Math.max(1, width);
+	const inner = Math.max(1, width - 4);
+	const lines: string[] = [];
+	const count = snapshot.requirements.length;
+	const taskBody: Span[][] = wrap(snapshot.statement, inner).map((line) => [span(line)]);
+	if (snapshot.taskId) {
+		taskBody.push([span("")]);
+		if (count) for (const [index, requirement] of snapshot.requirements.entries()) taskBody.push(...prefixedRows(requirement, inner, ` ${index + 1}. `, "muted"));
+		else taskBody.push([span(" (none recorded)", "muted")]);
+	}
+	lines.push(...panel([span(snapshot.taskId ? "Task" : "Board", undefined, true)], taskBody, width, palette, snapshot.taskId ? [span(`${count} ${count === 1 ? "requirement" : "requirements"}`, "muted")] : []));
+	if (snapshot.taskId) {
+		if (width >= 64) {
+			const leftWidth = Math.floor((width - 1) / 2);
+			const left = gatePanel("Design gate", snapshot.gates.design, leftWidth, palette, frame);
+			const right = gatePanel("Implementation gate", snapshot.gates.implementation, width - 1 - leftWidth, palette, frame);
+			for (let index = 0; index < Math.max(left.length, right.length); index++) lines.push(`${left[index] ?? " ".repeat(leftWidth)} ${right[index] ?? ""}`);
+		} else {
+			lines.push(...gatePanel("Design gate", snapshot.gates.design, width, palette, frame));
+			lines.push(...gatePanel("Implementation gate", snapshot.gates.implementation, width, palette, frame));
+		}
+		if (snapshot.blockers.length) lines.push(...panel([span("Blockers", "error", true)], snapshot.blockers.flatMap((blocker) => prefixedRows(blocker, inner, " ✗ ", "error")), width, palette));
+		if (snapshot.children.length) lines.push(...panel([span("Activity", "accent", true)], snapshot.children.flatMap((child) => prefixedRows(`${child.name} — ${child.status}`, inner, `${SPINNER[frame % SPINNER.length]} `, "accent")), width, palette));
+		lines.push(...panel([span("Spend", undefined, true)], wrap(`$${snapshot.spend.cost.toFixed(4)} · ${snapshot.spend.tokens.toLocaleString("en-US")} tokens · ${snapshot.spend.entries} runs`, inner).map((line) => [span(line, "muted")]), width, palette));
+	}
+	if (snapshot.errors.length) lines.push(...panel([span("State warnings", "warning", true)], snapshot.errors.flatMap((error) => prefixedRows(error, inner, " ⚠ ", "warning")), width, palette));
+	return lines;
+}
+
+export function renderCockpit(snapshot: BoardSnapshot, width: number, palette: Palette = PLAIN_PALETTE, frame = 0): string[] {
+	return [...renderHeader(snapshot, width, palette, frame), ...renderPanels(snapshot, width, palette, frame)];
+}
+
+export function renderCockpitPage(snapshot: BoardSnapshot, width: number, height: number, offset = 0, feedback = "", palette: Palette = PLAIN_PALETTE, frame = 0): { lines: string[]; offset: number; maxOffset: number; pageSize: number } {
+	width = Math.max(1, width);
+	height = Math.max(4, height);
+	const header = renderHeader(snapshot, width, palette, frame);
+	const body = renderPanels(snapshot, width, palette, frame);
+	const key = (label: string, action: string): Span[] => [span(label, "accent", true), span(` ${action}`, "muted")];
+	const hintRows = packSpanCells(snapshot.active
+		? [key("a", "append"), key("k", "kill"), key("↑↓", "scroll"), key("⇞⇟", "page"), key("g/G", "ends"), key("q", "close")]
+		: [key("↑↓", "scroll"), key("q", "close")], width);
+	let feedbackRows = feedback ? wrap(feedback, Math.max(1, width - 2), "▸ ").map((line) => [span(line, "accent")]) : [];
+	const fixed = header.length + hintRows.length + 1;
+	feedbackRows = feedbackRows.slice(0, Math.max(0, height - fixed - 1));
+	const pageSize = Math.max(1, height - fixed - feedbackRows.length);
+	const maxOffset = Math.max(0, body.length - pageSize);
+	const finalOffset = Math.max(0, Math.min(offset, maxOffset));
+	const visible = body.slice(finalOffset, finalOffset + pageSize);
+	while (visible.length < pageSize) visible.push("");
+	const last = Math.min(body.length, finalOffset + pageSize);
+	const status: Span[] = [
+		span(finalOffset > 0 ? "▲ " : "  ", "accent"),
+		span(`${body.length ? finalOffset + 1 : 0}–${last}/${body.length}`, "muted"),
+		span(last < body.length ? " ▼" : "  ", "accent"),
+		...(snapshot.updatedAt ? [span(`   heartbeat ${snapshot.updatedAt.slice(11, 19)}`, "dim")] : []),
+	];
+	const lines = [...header, ...visible, ...feedbackRows.map((row) => paint(row, palette)), paint(fitSpans(status, width), palette), ...hintRows.map((row) => paint(row, palette))];
+	return { lines: lines.slice(0, height), offset: finalOffset, maxOffset, pageSize };
 }
 
 export interface RestartState { attempts: number; lastStartedAt?: number }
@@ -414,20 +551,31 @@ export default function cockpit(pi: ExtensionAPI): void {
 		const stopWatch = watchState(ctx.cwd, () => { snapshot = loadCockpitSnapshot(ctx.cwd); tuiRender(); });
 		cleanup = () => { stopWatch(); supervisor.stop(); };
 		ctx.ui.setTitle("council cockpit");
-		void ctx.ui.custom<void>((tui, _theme, _keys, done) => {
+		void ctx.ui.custom<void>((tui, theme, _keys, done) => {
 			let scroll = 0;
+			let frame = 0;
+			let pageSize = 8;
+			const palette: Palette = theme ? { fg: (color, text) => theme.fg(color as never, text), bold: (text) => theme.bold(text) } : PLAIN_PALETTE;
+			const live = () => !snapshot.connected || snapshot.children.length > 0 || [...snapshot.gates.design, ...snapshot.gates.implementation].some((row) => row.state === "reviewing");
+			const spinner = setInterval(() => { if (live()) { frame += 1; tui.requestRender(); } }, 160);
+			spinner.unref?.();
 			tuiRender = () => tui.requestRender();
 			return {
 				render: (width: number) => {
-					const page = renderCockpitPage(snapshot, width, Math.max(8, (process.stdout.rows ?? 24) - 2), scroll, feedback);
+					const page = renderCockpitPage(snapshot, width, Math.max(8, (process.stdout.rows ?? 24) - 2), scroll, feedback, palette, frame);
 					scroll = page.offset;
+					pageSize = page.pageSize;
 					return page.lines;
 				},
 				invalidate() { snapshot = loadCockpitSnapshot(ctx.cwd); },
 				handleInput(data: string) {
 					if (["j", "J", "\u001b[B"].includes(data)) { scroll += 1; tui.requestRender(); return; }
 					if (["u", "U", "\u001b[A"].includes(data)) { scroll = Math.max(0, scroll - 1); tui.requestRender(); return; }
-					if (data === "q" || data === "Q" || data === "\u001b") { cleanup?.(); done(undefined); ctx.shutdown(); return; }
+					if (data === "\u001b[6~" || data === " ") { scroll += pageSize; tui.requestRender(); return; }
+					if (data === "\u001b[5~") { scroll = Math.max(0, scroll - pageSize); tui.requestRender(); return; }
+					if (data === "g" || data === "\u001b[H") { scroll = 0; tui.requestRender(); return; }
+					if (data === "G" || data === "\u001b[F") { scroll = Number.MAX_SAFE_INTEGER; tui.requestRender(); return; }
+					if (data === "q" || data === "Q" || data === "\u001b") { clearInterval(spinner); cleanup?.(); done(undefined); ctx.shutdown(); return; }
 					if (snapshot.active && (data === "a" || data === "A")) void ctx.ui.input("Append requirement", "The Owner will record and propagate this requirement").then((text) => {
 						if (!text?.trim()) return;
 						feedback = "Requirement sending…";

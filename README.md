@@ -41,10 +41,13 @@ Then, in a git repository with at least one commit:
 - **Watch progress** in the status widget above the editor, or with `/task` for the full
   report (requirements, per-verifier gate states, blocking comments, and spend), or run
   `council board` for the dedicated cockpit. The board reads disk state, supervises an RPC
-  Owner, and sends append/kill actions through that Owner—it never edits task files. Use
-  ↑/↓ (or j/u) to scroll, `a` to append, `k` to kill with confirmation, and q/Esc to close.
-  State is plain files under `.pi/council/tasks/<id>/`, including verdict, activity,
-  status, and spend projections.
+  Owner, and sends append/kill actions through that Owner—it never edits task files. It is
+  a full-screen themed TUI: header with task id, phase, and owner liveness; bordered
+  panels for the task, both gates (side by side on wide terminals), blockers, running
+  children, and spend; colored ✓/✗/⚠/○ verifier states with a live spinner while reviews
+  run. Scroll with ↑/↓ (or j/u), page with PgUp/PgDn (or Space), jump with g/G, `a` to
+  append, `k` to kill with confirmation, and q/Esc to close. State is plain files under
+  `.pi/council/tasks/<id>/`, including verdict, activity, status, and spend projections.
 
 ## The verifier panel
 
