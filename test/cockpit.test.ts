@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import {
+	BoardView,
 	JsonlDecoder,
 	OwnerSupervisor,
 	type Palette,
@@ -13,7 +14,6 @@ import {
 	loadCockpitSnapshot,
 	nextRestart,
 	renderCockpit,
-	renderCockpitPage,
 } from "../src/cockpit.ts";
 
 function fixture(): { cwd: string; dir: string } {
@@ -30,6 +30,20 @@ function fixture(): { cwd: string; dir: string } {
 		status: "active",
 	}));
 	return { cwd, dir };
+}
+
+function writeStatus(dir: string, now: number, options: { blockers?: string[] } = {}): void {
+	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
+		taskId: "abc123", phase: "IMPL_GATE", generatedAt: new Date(now).toISOString(),
+		heartbeatAt: new Date(now).toISOString(), pendingInputIds: [], blockers: options.blockers ?? [],
+		design: { hash: "d", holds: true, verifiers: [{ name: "clean-code", fingerprint: "f", state: "go" }, { name: "design", fingerprint: "f", state: "go" }] },
+		implementation: { hash: "i", holds: false, verifiers: [
+			{ name: "clean-code", fingerprint: "f", state: "go" },
+			{ name: "interfaces", fingerprint: "f", state: "no-go", comments: ["Fix RPC framing before the supervisor restarts the owner process"] },
+			{ name: "design", fingerprint: "f", state: "reviewing" },
+		] },
+		spend: { runs: 0, costUsd: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, byKind: {} },
+	}));
 }
 
 test("snapshot projects status, activity, verdict history, design, and spend", () => {
@@ -91,26 +105,29 @@ test("render is a bounded, complete task board with visible controls", () => {
 	assert.match(text, /2 requirements/);
 	assert.match(text, /Design gate/);
 	assert.match(text, /Implementation gate/);
-	assert.match(text, /\(verdicts pending\)/);
+	assert.match(text, /verdicts pending/);
 	assert.match(text, /Blockers/);
 	assert.match(text, /Spend/);
 	assert.equal(lines.filter((line) => line.includes("1. ")).length, 1, "wrapped requirements are numbered once");
-	const page = renderCockpitPage({ ...loadCockpitSnapshot(cwd), requirements: Array.from({ length: 30 }, (_, i) => `requirement ${i}`) }, 40, 12, 999, "Requirement accepted by Owner");
-	assert.equal(page.lines.length, 12);
-	const footer = page.lines.slice(-6).join(" ");
+
+	const view = new BoardView();
+	const page = view.renderPage({ ...loadCockpitSnapshot(cwd), requirements: Array.from({ length: 30 }, (_, i) => `requirement ${i}`) }, 40, 12, "Requirement accepted by Owner");
+	assert.equal(page.length, 12);
+	const footer = page.slice(-6).join(" ");
 	assert.match(footer, /Requirement accepted by Owner/, "feedback stays fixed");
-	assert.match(footer, /\d+–\d+\/\d+/, "scroll position stays fixed");
+	assert.match(footer, /\d+–\d+\/\d+/, "position stays fixed");
 	assert.match(footer, /a append/);
 	assert.match(footer, /k kill/);
 	assert.match(footer, /q close/);
-	assert.ok(page.maxOffset > 0);
-	assert.equal(page.offset, page.maxOffset, "overscroll clamps to the last page");
-	const narrow = renderCockpitPage({ ...loadCockpitSnapshot(cwd), spend: { cost: 1.25, tokens: 12345, entries: 9 } }, 20, 14, 0, "Requirement delivery failed; retry after reconnect");
-	const narrowText = narrow.lines.join(" ");
+	assert.ok(page.some((line) => line.includes("❯")), "focus cursor is visible");
+
+	const narrowView = new BoardView();
+	const narrow = narrowView.renderPage({ ...loadCockpitSnapshot(cwd), spend: { cost: 1.25, tokens: 12345, entries: 9 } }, 20, 14, "Requirement delivery failed; retry after reconnect");
+	const narrowText = narrow.join(" ");
 	assert.match(narrowText, /delivery failed/);
 	assert.match(narrowText, /close/);
-	assert.ok(narrow.lines.length <= 14);
-	for (const line of narrow.lines) assert.ok(Array.from(line).length <= 20, JSON.stringify(line));
+	assert.ok(narrow.length <= 14);
+	for (const line of narrow) assert.ok(Array.from(line).length <= 20, JSON.stringify(line));
 	const narrowFull = renderCockpit({ ...loadCockpitSnapshot(cwd), spend: { cost: 1.25, tokens: 12345, entries: 9 } }, 20).join(" ");
 	assert.match(narrowFull, /12,345/);
 	assert.match(narrowFull, /9 runs/);
@@ -118,56 +135,71 @@ test("render is a bounded, complete task board with visible controls", () => {
 	assert.match(narrowHeader, /abc123/);
 	assert.match(narrowHeader, /UNKNOWN/);
 	assert.match(narrowHeader, /reconnecting/);
+
 	const taskFile = path.join(cwd, ".pi", "council", "tasks", "abc123", "task.json");
 	const closed = JSON.parse(fs.readFileSync(taskFile, "utf8")); closed.status = "done"; closed.closedAt = "now"; fs.writeFileSync(taskFile, JSON.stringify(closed));
-	const closedPage = renderCockpitPage(loadCockpitSnapshot(cwd), 50, 12);
-	assert.doesNotMatch(closedPage.lines.join(" "), /append|kill/);
+	const closedPage = new BoardView().renderPage(loadCockpitSnapshot(cwd), 50, 12);
+	assert.doesNotMatch(closedPage.join(" "), /append|kill/);
 	fs.rmSync(cwd, { recursive: true, force: true });
 });
 
-test("gate panels sit side by side on wide terminals and stack when narrow", () => {
+test("board is keyboard-navigable: focus order, folding, and previews", () => {
 	const { cwd, dir } = fixture();
 	const now = Date.now();
-	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
-		taskId: "abc123", phase: "DESIGN_GATE", generatedAt: new Date(now).toISOString(),
-		heartbeatAt: new Date(now).toISOString(), pendingInputIds: [], blockers: [],
-		design: { hash: "d", holds: false, verifiers: [{ name: "clean-code", fingerprint: "f", state: "go" }, { name: "design", fingerprint: "f", state: "reviewing" }] },
-		implementation: { hash: "i", holds: false, verifiers: [{ name: "interfaces", fingerprint: "f", state: "no-go", comments: ["Fix RPC framing"] }] },
-		spend: { runs: 0, costUsd: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, byKind: {} },
-	}));
-	const wide = renderCockpit(loadCockpitSnapshot(cwd, now), 100);
-	assert.ok(wide.some((line) => line.includes("Design gate") && line.includes("Implementation gate")), "gates share a row at width 100");
-	for (const line of wide) assert.ok(Array.from(line).length <= 100, JSON.stringify(line));
-	const stacked = renderCockpit(loadCockpitSnapshot(cwd, now), 48);
-	assert.ok(!stacked.some((line) => line.includes("Design gate") && line.includes("Implementation gate")), "gates stack at width 48");
-	assert.ok(stacked.some((line) => line.includes("Design gate")));
-	assert.ok(stacked.some((line) => line.includes("Implementation gate")));
-	assert.match(stacked.join("\n"), /↳ Fix RPC framing/);
-	assert.match(stacked.join("\n"), /1\/2 GO/, "partial gate shows its GO count");
+	writeStatus(dir, now);
+	const snapshot = () => loadCockpitSnapshot(cwd, now);
+	const view = new BoardView();
+	view.renderPage(snapshot(), 60, 30);
+	assert.equal(view.focus, "task", "focus starts on the first node");
+	view.move(1);
+	assert.equal(view.focus, "gate:design");
+	view.move(1);
+	assert.equal(view.focus, "gate:implementation", "a holding gate folds, so its verifiers are skipped");
+	view.move(1);
+	view.renderPage(snapshot(), 60, 30);
+	assert.equal(view.focus, "verifier:implementation:clean-code", "an unheld gate opens by default");
+
+	view.collapse();
+	assert.equal(view.focus, "gate:implementation", "collapse on a leaf climbs to its parent");
+	view.collapse();
+	let lines = view.renderPage(snapshot(), 60, 30);
+	assert.ok(!lines.join("\n").includes("interfaces"), "a folded gate hides its verifiers");
+	view.toggle();
+	lines = view.renderPage(snapshot(), 60, 30);
+	assert.match(lines.join("\n"), /interfaces ↳ Fix RPC framing/, "collapsed verifiers preview their first comment");
+	assert.ok(!lines.join("\n").includes("owner process"), "the preview is cut, not wrapped");
+
+	view.move(2);
+	view.renderPage(snapshot(), 60, 30);
+	assert.equal(view.focus, "verifier:implementation:interfaces");
+	view.expand();
+	lines = view.renderPage(snapshot(), 60, 30);
+	assert.match(lines.join("\n"), /owner process/, "expanding a verifier reveals the full comment");
+
+	const tall = new BoardView();
+	tall.renderPage(snapshot(), 60, 8);
+	tall.last();
+	const page = tall.renderPage(snapshot(), 60, 8);
+	assert.equal(tall.focus, "spend");
+	assert.ok(page.some((line) => line.includes("❯") && line.includes("Spend")), "viewport follows the cursor to the end");
 	fs.rmSync(cwd, { recursive: true, force: true });
 });
 
 test("palette paints states, chrome, and feedback; the spinner advances with the frame", () => {
 	const { cwd, dir } = fixture();
 	const now = Date.now();
-	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
-		taskId: "abc123", phase: "DESIGN_GATE", generatedAt: new Date(now).toISOString(),
-		heartbeatAt: new Date(now).toISOString(), pendingInputIds: [], blockers: ["interfaces: Fix RPC framing"],
-		design: { hash: "d", holds: false, verifiers: [{ name: "clean-code", fingerprint: "f", state: "go" }, { name: "design", fingerprint: "f", state: "reviewing" }] },
-		implementation: { hash: "i", holds: false, verifiers: [{ name: "interfaces", fingerprint: "f", state: "no-go", comments: ["Fix RPC framing"] }] },
-		spend: { runs: 0, costUsd: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, byKind: {} },
-	}));
+	writeStatus(dir, now, { blockers: ["interfaces: Fix RPC framing"] });
 	const marker: Palette = { fg: (color, text) => `<${color}>${text}</${color}>`, bold: (text) => `<b>${text}</b>` };
-	const page = renderCockpitPage(loadCockpitSnapshot(cwd, now), 90, 34, 0, "hello", marker, 0);
-	const text = page.lines.join("\n");
+	const text = new BoardView().renderPage(loadCockpitSnapshot(cwd, now), 90, 34, "hello", marker, 0).join("\n");
 	assert.match(text, /<accent><b>◆ council cockpit<\/b><\/accent>/, "brand is accented");
 	assert.match(text, /<success><b>✓<\/b><\/success>/, "GO paints success");
 	assert.match(text, /<error><b>✗<\/b><\/error>/, "NO-GO paints error");
 	assert.match(text, /<accent><b>◇<\/b><\/accent>/, "reviewing paints an accent spinner");
-	assert.match(text, /<dim>╭─ <\/dim>/, "borders stay dim");
+	assert.match(text, /<accent>▾ <\/accent>/, "expandable nodes carry accent fold arrows");
+	assert.match(text, /<dim>─+<\/dim>/, "the header rule stays dim");
 	assert.match(text, /<accent>▸ hello<\/accent>/, "feedback is accented");
 	assert.match(text, /<error><b>Blockers<\/b><\/error>/, "blockers title paints error");
-	const later = renderCockpitPage(loadCockpitSnapshot(cwd, now), 90, 34, 0, "", marker, 1).lines.join("\n");
+	const later = new BoardView().renderPage(loadCockpitSnapshot(cwd, now), 90, 34, "", marker, 1).join("\n");
 	assert.match(later, /<accent><b>◈<\/b><\/accent>/, "spinner advances with the frame");
 	fs.rmSync(cwd, { recursive: true, force: true });
 });
@@ -182,10 +214,11 @@ test("missing status never promotes historical verdicts to fresh gate state", ()
 	fs.rmSync(cwd, { recursive: true, force: true });
 });
 
-test("RPC JSONL framing uses LF only", () => {
+test("RPC JSONL framing uses LF only (U+2028 is data, not a newline)", () => {
 	const decoder = new JsonlDecoder();
-	assert.deepEqual(decoder.push(Buffer.from('{"message":"a\u2028b"}')), []);
-	assert.deepEqual(decoder.push("\r\n"), ['{"message":"a b"}']);
+	const payload = `{"message":"a${String.fromCharCode(0x2028)}b"}`;
+	assert.deepEqual(decoder.push(Buffer.from(payload)), []);
+	assert.deepEqual(decoder.push("\r\n"), [payload]);
 });
 
 test("controls produce Owner RPC prompts rather than file mutations", () => {

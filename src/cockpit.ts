@@ -212,37 +212,119 @@ function packSpanCells(cells: Span[][], width: number, separator = " · "): Span
 	return rows;
 }
 
-function panel(title: Span[], rows: Span[][], width: number, palette: Palette, badge: Span[] = []): string[] {
-	if (width < 12) return [fitSpans(title, width), ...rows.map((row) => fitSpans(row, width))].map((row) => paint(row, palette));
-	const inner = width - 4;
-	// A badge that cannot leave room for at least one title cell is dropped, never overflowed.
-	const shown = badge.length && spansWidth(badge) <= width - 9 ? badge : [];
-	const titleBudget = Math.max(1, shown.length ? width - 8 - spansWidth(shown) : width - 5);
-	const titleFit = fitSpans(title, titleBudget);
-	const fill = "─".repeat(Math.max(0, titleBudget - spansWidth(titleFit)));
-	const top: Span[] = [span("╭─ ", BORDER), ...titleFit, span(" ", BORDER), span(fill, BORDER), ...(shown.length ? [span(" "), ...shown, span(" ─", BORDER)] : []), span("╮", BORDER)];
-	const body = (rows.length ? rows : [[span("")]]).map((row) => {
-		const fitted = fitSpans(row, inner);
-		return [span("│ ", BORDER), ...fitted, span(" ".repeat(Math.max(0, inner - spansWidth(fitted)))), span(" │", BORDER)];
-	});
-	return [top, ...body, [span(`╰${"─".repeat(width - 2)}╯`, BORDER)]].map((row) => paint(row, palette));
+// A node is one focusable row: a one-line summary (optionally different while
+// collapsed, e.g. a preview), wrapped detail blocks shown when expanded, and children.
+interface DetailBlock { text: string; prefix: string; prefixColor?: PaletteColor; color?: PaletteColor }
+export interface BoardNode {
+	id: string;
+	summary: Span[];
+	collapsedSummary?: Span[];
+	details?: DetailBlock[];
+	children?: BoardNode[];
+	defaultExpanded?: boolean;
 }
 
-function gatePanel(name: string, rows: BoardVerifier[], width: number, palette: Palette, frame: number): string[] {
-	const inner = Math.max(1, width - 4);
-	const go = rows.filter((row) => row.state === "GO").length;
-	const badge: Span[] = rows.length === 0 ? [] : go === rows.length
-		? [span("✓ HOLDS", "success", true)]
-		: [span(`${go}/${rows.length} GO`, go > 0 ? "warning" : "muted")];
-	const body: Span[][] = rows.length
-		? rows.flatMap((row) => {
-			const style = STATE_STYLE[row.state];
-			const icon = row.state === "reviewing" ? SPINNER[frame % SPINNER.length] : style.icon;
-			const label: Span[] = [span(icon, style.color, true), span(" "), span(cut(row.name, Math.max(1, inner - 2)), row.state === "NO-GO" ? "error" : undefined)];
-			return [label, ...row.comments.flatMap((comment) => wrap(comment, inner, "  ↳ ").map((line) => [span(line, "muted")]))];
-		})
-		: [[span("(verdicts pending)", "muted")]];
-	return panel([span(name, undefined, true)], body, width, palette, badge);
+function expandable(node: BoardNode): boolean { return Boolean(node.children?.length || node.details?.length); }
+
+export function buildBoardNodes(snapshot: BoardSnapshot, frame = 0): BoardNode[] {
+	const nodes: BoardNode[] = [];
+	if (!snapshot.taskId) {
+		nodes.push({ id: "board", summary: [span("Board", undefined, true)], details: [{ text: snapshot.statement, prefix: "" }], defaultExpanded: true });
+	} else {
+		const count = snapshot.requirements.length;
+		const noun = count === 1 ? "requirement" : "requirements";
+		nodes.push({
+			id: "task",
+			summary: [span("Task", undefined, true), span(` · ${count} ${noun}`, "muted")],
+			collapsedSummary: [span("Task", undefined, true), span(` · ${count} ${noun} · ${clean(snapshot.statement)}`, "muted")],
+			details: [
+				{ text: snapshot.statement, prefix: "" },
+				...(count
+					? snapshot.requirements.map((requirement, index) => ({ text: requirement, prefix: ` ${index + 1}. `, prefixColor: "muted" as PaletteColor }))
+					: [{ text: "(none recorded)", prefix: " ", color: "muted" as PaletteColor }]),
+			],
+		});
+		const gate = (label: string, key: string, rows: BoardVerifier[]): BoardNode => {
+			const go = rows.filter((row) => row.state === "GO").length;
+			const badge: Span[] = rows.length === 0
+				? [span(" · verdicts pending", "muted")]
+				: go === rows.length
+					? [span(" · ✓ HOLDS", "success", true)]
+					: [span(` · ${go}/${rows.length} GO`, go > 0 ? "warning" : "muted")];
+			return {
+				id: `gate:${key}`,
+				summary: [span(label, undefined, true), ...badge],
+				children: rows.map((row) => {
+					const style = STATE_STYLE[row.state];
+					const icon = row.state === "reviewing" ? SPINNER[frame % SPINNER.length] : style.icon;
+					const name: Span[] = [span(icon, style.color, true), span(" "), span(row.name, row.state === "NO-GO" ? "error" : undefined)];
+					return {
+						id: `verifier:${key}:${row.name}`,
+						summary: name,
+						collapsedSummary: row.comments.length ? [...name, span(` ↳ ${clean(row.comments[0])}`, "muted")] : undefined,
+						details: row.comments.map((comment) => ({ text: comment, prefix: "↳ ", color: "muted" as PaletteColor })),
+					};
+				}),
+				// A healthy gate folds to one line; an unheld one opens for review.
+				defaultExpanded: rows.length > 0 && go !== rows.length,
+			};
+		};
+		nodes.push(gate("Design gate", "design", snapshot.gates.design));
+		nodes.push(gate("Implementation gate", "implementation", snapshot.gates.implementation));
+		if (snapshot.blockers.length) nodes.push({
+			id: "blockers",
+			summary: [span("Blockers", "error", true), span(` · ${snapshot.blockers.length}`, "muted")],
+			children: snapshot.blockers.map((blocker, index) => ({
+				id: `blocker:${index}:${blocker.slice(0, 32)}`,
+				summary: [span("✗ ", "error", true), span(clean(blocker))],
+				details: [{ text: blocker, prefix: "" }],
+			})),
+			defaultExpanded: true,
+		});
+		if (snapshot.children.length) nodes.push({
+			id: "activity",
+			summary: [span("Activity", "accent", true), span(` · ${snapshot.children.length} running`, "muted")],
+			children: snapshot.children.map((child) => ({
+				id: `child:${child.name}`,
+				summary: [span(`${SPINNER[frame % SPINNER.length]} `, "accent", true), span(`${child.name} — ${clean(child.status)}`)],
+				details: [{ text: `${child.name} — ${child.status}`, prefix: "" }],
+			})),
+			defaultExpanded: true,
+		});
+		const spendText = `$${snapshot.spend.cost.toFixed(4)} · ${snapshot.spend.tokens.toLocaleString("en-US")} tokens · ${snapshot.spend.entries} runs`;
+		nodes.push({
+			id: "spend",
+			summary: [span("Spend", undefined, true), span(` · ${spendText}`, "muted")],
+			details: [{ text: spendText, prefix: "", color: "muted" as PaletteColor }],
+		});
+	}
+	if (snapshot.errors.length) nodes.push({
+		id: "warnings",
+		summary: [span("State warnings", "warning", true), span(` · ${snapshot.errors.length}`, "muted")],
+		children: snapshot.errors.map((error, index) => ({ id: `warning:${index}`, summary: [span("⚠ ", "warning", true), span(clean(error))], details: [{ text: error, prefix: "" }] })),
+		defaultExpanded: true,
+	});
+	return nodes;
+}
+
+export interface BoardRow { spans: Span[]; nodeId?: string }
+
+export function flattenBoardNodes(nodes: BoardNode[], width: number, expanded: (node: BoardNode) => boolean, depth = 0): BoardRow[] {
+	const rows: BoardRow[] = [];
+	for (const node of nodes) {
+		const indent = "  ".repeat(depth);
+		const open = expandable(node) && expanded(node);
+		const arrow = expandable(node) ? (open ? "▾ " : "▸ ") : "  ";
+		const summary = !open && node.collapsedSummary ? node.collapsedSummary : node.summary;
+		rows.push({ nodeId: node.id, spans: fitSpans([span(indent), span(arrow, expandable(node) ? "accent" : undefined), ...summary], Math.max(1, width)) });
+		if (!open) continue;
+		const detailIndent = `${indent}    `;
+		for (const block of node.details ?? []) {
+			for (const row of prefixedRows(block.text, Math.max(1, width - displayWidth(detailIndent)), block.prefix, block.prefixColor ?? block.color, block.color)) rows.push({ spans: [span(detailIndent), ...row] });
+		}
+		if (node.children) rows.push(...flattenBoardNodes(node.children, width, expanded, depth + 1));
+	}
+	return rows;
 }
 
 export function renderHeader(snapshot: BoardSnapshot, width: number, palette: Palette = PLAIN_PALETTE, frame = 0): string[] {
@@ -255,66 +337,116 @@ export function renderHeader(snapshot: BoardSnapshot, width: number, palette: Pa
 	return [...packSpanCells(cells, width).map((row) => paint(row, palette)), paint([span("─".repeat(width), BORDER)], palette)];
 }
 
-export function renderPanels(snapshot: BoardSnapshot, width: number, palette: Palette = PLAIN_PALETTE, frame = 0): string[] {
-	width = Math.max(1, width);
-	const inner = Math.max(1, width - 4);
-	const lines: string[] = [];
-	const count = snapshot.requirements.length;
-	const taskBody: Span[][] = wrap(snapshot.statement, inner).map((line) => [span(line)]);
-	if (snapshot.taskId) {
-		taskBody.push([span("")]);
-		if (count) for (const [index, requirement] of snapshot.requirements.entries()) taskBody.push(...prefixedRows(requirement, inner, ` ${index + 1}. `, "muted"));
-		else taskBody.push([span(" (none recorded)", "muted")]);
-	}
-	lines.push(...panel([span(snapshot.taskId ? "Task" : "Board", undefined, true)], taskBody, width, palette, snapshot.taskId ? [span(`${count} ${count === 1 ? "requirement" : "requirements"}`, "muted")] : []));
-	if (snapshot.taskId) {
-		if (width >= 64) {
-			const leftWidth = Math.floor((width - 1) / 2);
-			const left = gatePanel("Design gate", snapshot.gates.design, leftWidth, palette, frame);
-			const right = gatePanel("Implementation gate", snapshot.gates.implementation, width - 1 - leftWidth, palette, frame);
-			for (let index = 0; index < Math.max(left.length, right.length); index++) lines.push(`${left[index] ?? " ".repeat(leftWidth)} ${right[index] ?? ""}`);
-		} else {
-			lines.push(...gatePanel("Design gate", snapshot.gates.design, width, palette, frame));
-			lines.push(...gatePanel("Implementation gate", snapshot.gates.implementation, width, palette, frame));
-		}
-		if (snapshot.blockers.length) lines.push(...panel([span("Blockers", "error", true)], snapshot.blockers.flatMap((blocker) => prefixedRows(blocker, inner, " ✗ ", "error")), width, palette));
-		if (snapshot.children.length) lines.push(...panel([span("Activity", "accent", true)], snapshot.children.flatMap((child) => prefixedRows(`${child.name} — ${child.status}`, inner, `${SPINNER[frame % SPINNER.length]} `, "accent")), width, palette));
-		lines.push(...panel([span("Spend", undefined, true)], wrap(`$${snapshot.spend.cost.toFixed(4)} · ${snapshot.spend.tokens.toLocaleString("en-US")} tokens · ${snapshot.spend.entries} runs`, inner).map((line) => [span(line, "muted")]), width, palette));
-	}
-	if (snapshot.errors.length) lines.push(...panel([span("State warnings", "warning", true)], snapshot.errors.flatMap((error) => prefixedRows(error, inner, " ⚠ ", "warning")), width, palette));
-	return lines;
-}
-
+/** The complete board, fully expanded — reference rendering and test surface. */
 export function renderCockpit(snapshot: BoardSnapshot, width: number, palette: Palette = PLAIN_PALETTE, frame = 0): string[] {
-	return [...renderHeader(snapshot, width, palette, frame), ...renderPanels(snapshot, width, palette, frame)];
+	width = Math.max(1, width);
+	const rows = flattenBoardNodes(buildBoardNodes(snapshot, frame), width, () => true);
+	return [...renderHeader(snapshot, width, palette, frame), ...rows.map((row) => paint(fitSpans(row.spans, width), palette))];
 }
 
-export function renderCockpitPage(snapshot: BoardSnapshot, width: number, height: number, offset = 0, feedback = "", palette: Palette = PLAIN_PALETTE, frame = 0): { lines: string[]; offset: number; maxOffset: number; pageSize: number } {
-	width = Math.max(1, width);
-	height = Math.max(4, height);
-	const header = renderHeader(snapshot, width, palette, frame);
-	const body = renderPanels(snapshot, width, palette, frame);
-	const key = (label: string, action: string): Span[] => [span(label, "accent", true), span(` ${action}`, "muted")];
-	const hintRows = packSpanCells(snapshot.active
-		? [key("a", "append"), key("k", "kill"), key("↑↓", "scroll"), key("⇞⇟", "page"), key("g/G", "ends"), key("q", "close")]
-		: [key("↑↓", "scroll"), key("q", "close")], width);
-	let feedbackRows = feedback ? wrap(feedback, Math.max(1, width - 2), "▸ ").map((line) => [span(line, "accent")]) : [];
-	const fixed = header.length + hintRows.length + 1;
-	feedbackRows = feedbackRows.slice(0, Math.max(0, height - fixed - 1));
-	const pageSize = Math.max(1, height - fixed - feedbackRows.length);
-	const maxOffset = Math.max(0, body.length - pageSize);
-	const finalOffset = Math.max(0, Math.min(offset, maxOffset));
-	const visible = body.slice(finalOffset, finalOffset + pageSize);
-	while (visible.length < pageSize) visible.push("");
-	const last = Math.min(body.length, finalOffset + pageSize);
-	const status: Span[] = [
-		span(finalOffset > 0 ? "▲ " : "  ", "accent"),
-		span(`${body.length ? finalOffset + 1 : 0}–${last}/${body.length}`, "muted"),
-		span(last < body.length ? " ▼" : "  ", "accent"),
-		...(snapshot.updatedAt ? [span(`   heartbeat ${snapshot.updatedAt.slice(11, 19)}`, "dim")] : []),
-	];
-	const lines = [...header, ...visible, ...feedbackRows.map((row) => paint(row, palette)), paint(fitSpans(status, width), palette), ...hintRows.map((row) => paint(row, palette))];
-	return { lines: lines.slice(0, height), offset: finalOffset, maxOffset, pageSize };
+/**
+ * Keyboard-navigable board: ↑/↓ move a focus cursor over nodes, ⏎/space toggle,
+ * ←/→ fold (← on a collapsed node jumps to its parent), and the viewport follows
+ * the cursor. Expansion overrides and focus survive snapshot refreshes by node id.
+ */
+export class BoardView {
+	private overrides = new Map<string, boolean>();
+	private nodesById = new Map<string, BoardNode>();
+	private parentById = new Map<string, string>();
+	private focusable: string[] = [];
+	private focusId?: string;
+	private focusIndex = 0;
+	private scroll = 0;
+	private pageRows = 8;
+
+	private isExpanded = (node: BoardNode): boolean => this.overrides.get(node.id) ?? node.defaultExpanded ?? false;
+
+	private index(nodes: BoardNode[], parent?: string): void {
+		for (const node of nodes) {
+			this.nodesById.set(node.id, node);
+			if (parent) this.parentById.set(node.id, parent);
+			if (node.children) this.index(node.children, node.id);
+		}
+	}
+
+	/** Flatten the current snapshot and re-anchor focus (by id, else by position). */
+	private rowsFor(snapshot: BoardSnapshot, width: number, frame: number): BoardRow[] {
+		const nodes = buildBoardNodes(snapshot, frame);
+		this.nodesById.clear();
+		this.parentById.clear();
+		this.index(nodes);
+		const rows = flattenBoardNodes(nodes, Math.max(1, width - 2), this.isExpanded);
+		this.focusable = rows.filter((row) => row.nodeId !== undefined).map((row) => row.nodeId!);
+		if (this.focusable.length === 0) { this.focusId = undefined; this.focusIndex = 0; }
+		else if (this.focusId !== undefined && this.focusable.includes(this.focusId)) this.focusIndex = this.focusable.indexOf(this.focusId);
+		else { this.focusIndex = Math.max(0, Math.min(this.focusIndex, this.focusable.length - 1)); this.focusId = this.focusable[this.focusIndex]; }
+		return rows;
+	}
+
+	get focus(): string | undefined { return this.focusId; }
+
+	move(delta: number): void {
+		if (this.focusable.length === 0) return;
+		this.focusIndex = Math.max(0, Math.min(this.focusable.length - 1, this.focusIndex + delta));
+		this.focusId = this.focusable[this.focusIndex];
+	}
+	movePage(direction: 1 | -1): void { this.move(direction * this.pageRows); }
+	first(): void { this.move(-Number.MAX_SAFE_INTEGER); }
+	last(): void { this.move(Number.MAX_SAFE_INTEGER); }
+
+	toggle(): void {
+		const node = this.focusId !== undefined ? this.nodesById.get(this.focusId) : undefined;
+		if (node && expandable(node)) this.overrides.set(node.id, !this.isExpanded(node));
+	}
+	expand(): void {
+		const node = this.focusId !== undefined ? this.nodesById.get(this.focusId) : undefined;
+		if (node && expandable(node) && !this.isExpanded(node)) this.overrides.set(node.id, true);
+	}
+	/** Fold the focused node, or climb to its parent when already folded. */
+	collapse(): void {
+		const node = this.focusId !== undefined ? this.nodesById.get(this.focusId) : undefined;
+		if (!node) return;
+		if (expandable(node) && this.isExpanded(node)) { this.overrides.set(node.id, false); return; }
+		const parent = this.parentById.get(node.id);
+		if (parent !== undefined && this.focusable.includes(parent)) { this.focusId = parent; this.focusIndex = this.focusable.indexOf(parent); }
+	}
+
+	renderPage(snapshot: BoardSnapshot, width: number, height: number, feedback = "", palette: Palette = PLAIN_PALETTE, frame = 0): string[] {
+		width = Math.max(1, width);
+		height = Math.max(4, height);
+		const header = renderHeader(snapshot, width, palette, frame);
+		const rows = this.rowsFor(snapshot, width, frame);
+		const key = (label: string, action: string): Span[] => [span(label, "accent", true), span(` ${action}`, "muted")];
+		const hintRows = packSpanCells(snapshot.active
+			? [key("↑↓", "move"), key("⏎", "open"), key("←→", "fold"), key("⇞⇟", "page"), key("a", "append"), key("k", "kill"), key("q", "close")]
+			: [key("↑↓", "move"), key("⏎", "open"), key("q", "close")], width);
+		let feedbackRows = feedback ? wrap(feedback, Math.max(1, width - 2), "▸ ").map((line) => [span(line, "accent")]) : [];
+		const fixed = header.length + hintRows.length + 1;
+		feedbackRows = feedbackRows.slice(0, Math.max(0, height - fixed - 1));
+		const bodyHeight = Math.max(1, height - fixed - feedbackRows.length);
+		this.pageRows = bodyHeight;
+		const focusRow = this.focusId !== undefined ? rows.findIndex((row) => row.nodeId === this.focusId) : -1;
+		if (focusRow >= 0) {
+			if (focusRow < this.scroll) this.scroll = focusRow;
+			if (focusRow > this.scroll + bodyHeight - 1) this.scroll = focusRow - bodyHeight + 1;
+		}
+		this.scroll = Math.max(0, Math.min(this.scroll, Math.max(0, rows.length - bodyHeight)));
+		const visible = rows.slice(this.scroll, this.scroll + bodyHeight).map((row) => {
+			const focused = row.nodeId !== undefined && row.nodeId === this.focusId;
+			const gutter = focused ? span("❯ ", "accent", true) : span("  ");
+			return paint([gutter, ...(focused ? row.spans.map((part) => ({ ...part, bold: true })) : row.spans)], palette);
+		});
+		while (visible.length < bodyHeight) visible.push("");
+		const last = Math.min(rows.length, this.scroll + bodyHeight);
+		const status: Span[] = [
+			span(this.scroll > 0 ? "▲ " : "  ", "accent"),
+			span(`${rows.length ? this.scroll + 1 : 0}–${last}/${rows.length}`, "muted"),
+			span(last < rows.length ? " ▼" : "  ", "accent"),
+			...(snapshot.updatedAt ? [span(`   heartbeat ${snapshot.updatedAt.slice(11, 19)}`, "dim")] : []),
+		];
+		const lines = [...header, ...visible, ...feedbackRows.map((row) => paint(row, palette)), paint(fitSpans(status, width), palette), ...hintRows.map((row) => paint(row, palette))];
+		return lines.slice(0, height);
+	}
 }
 
 export interface RestartState { attempts: number; lastStartedAt?: number }
@@ -552,29 +684,26 @@ export default function cockpit(pi: ExtensionAPI): void {
 		cleanup = () => { stopWatch(); supervisor.stop(); };
 		ctx.ui.setTitle("council cockpit");
 		void ctx.ui.custom<void>((tui, theme, _keys, done) => {
-			let scroll = 0;
+			const view = new BoardView();
 			let frame = 0;
-			let pageSize = 8;
 			const palette: Palette = theme ? { fg: (color, text) => theme.fg(color as never, text), bold: (text) => theme.bold(text) } : PLAIN_PALETTE;
 			const live = () => !snapshot.connected || snapshot.children.length > 0 || [...snapshot.gates.design, ...snapshot.gates.implementation].some((row) => row.state === "reviewing");
 			const spinner = setInterval(() => { if (live()) { frame += 1; tui.requestRender(); } }, 160);
 			spinner.unref?.();
 			tuiRender = () => tui.requestRender();
 			return {
-				render: (width: number) => {
-					const page = renderCockpitPage(snapshot, width, Math.max(8, (process.stdout.rows ?? 24) - 2), scroll, feedback, palette, frame);
-					scroll = page.offset;
-					pageSize = page.pageSize;
-					return page.lines;
-				},
+				render: (width: number) => view.renderPage(snapshot, width, Math.max(8, (process.stdout.rows ?? 24) - 2), feedback, palette, frame),
 				invalidate() { snapshot = loadCockpitSnapshot(ctx.cwd); },
 				handleInput(data: string) {
-					if (["j", "J", "\u001b[B"].includes(data)) { scroll += 1; tui.requestRender(); return; }
-					if (["u", "U", "\u001b[A"].includes(data)) { scroll = Math.max(0, scroll - 1); tui.requestRender(); return; }
-					if (data === "\u001b[6~" || data === " ") { scroll += pageSize; tui.requestRender(); return; }
-					if (data === "\u001b[5~") { scroll = Math.max(0, scroll - pageSize); tui.requestRender(); return; }
-					if (data === "g" || data === "\u001b[H") { scroll = 0; tui.requestRender(); return; }
-					if (data === "G" || data === "\u001b[F") { scroll = Number.MAX_SAFE_INTEGER; tui.requestRender(); return; }
+					if (["j", "J", "\u001b[B"].includes(data)) { view.move(1); tui.requestRender(); return; }
+					if (["u", "U", "\u001b[A"].includes(data)) { view.move(-1); tui.requestRender(); return; }
+					if (data === "\r" || data === "\n" || data === " ") { view.toggle(); tui.requestRender(); return; }
+					if (data === "l" || data === "\u001b[C") { view.expand(); tui.requestRender(); return; }
+					if (data === "h" || data === "\u001b[D") { view.collapse(); tui.requestRender(); return; }
+					if (data === "\u001b[6~") { view.movePage(1); tui.requestRender(); return; }
+					if (data === "\u001b[5~") { view.movePage(-1); tui.requestRender(); return; }
+					if (data === "g" || data === "\u001b[H") { view.first(); tui.requestRender(); return; }
+					if (data === "G" || data === "\u001b[F") { view.last(); tui.requestRender(); return; }
 					if (data === "q" || data === "Q" || data === "\u001b") { clearInterval(spinner); cleanup?.(); done(undefined); ctx.shutdown(); return; }
 					if (snapshot.active && (data === "a" || data === "A")) void ctx.ui.input("Append requirement", "The Owner will record and propagate this requirement").then((text) => {
 						if (!text?.trim()) return;
