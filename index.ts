@@ -97,12 +97,11 @@ export default function (pi: ExtensionAPI) {
 		return { systemPrompt: `${event.systemPrompt}\n\n${ownerPrompt}\n\n## Current task state\n${snapshot}` };
 	});
 
-	const councilTools = new Set(["task_set", "task_requirements_add", "design_write", "dispatch_workers", "request_verdicts", "gate_status", "task_complete", "task_kill"]);
 	const protectedTools = new Set(["request_verdicts", "task_complete"]);
 	const readOnlyTools = new Set(["read", "grep", "find", "ls", "gate_status"]);
 	const activeMutations = new Set<string>();
 	let activeProtected: string | undefined;
-	pi.on("tool_call", async (event, ctx) => {
+	pi.on("tool_call", async (event) => {
 		const callId = event.toolCallId;
 		if (protectedTools.has(event.toolName)) {
 			if (activeProtected || activeMutations.size) return { block: true, reason: `Blocked ${event.toolName}: another mutation or gate operation is still running.` };
@@ -110,22 +109,11 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (readOnlyTools.has(event.toolName)) return;
-		if (activeProtected) return { block: true, reason: `Blocked ${event.toolName}: gate/completion verification is in progress.` };
-		if (councilTools.has(event.toolName)) { activeMutations.add(callId); return; }
-		// bash is the Owner's inspection surface: never gate it (the Owner prompt keeps
-		// implementation out of it), but serialize it against verdict sourcing above.
-		if (event.toolName === "bash") { activeMutations.add(callId); return; }
-		const store = storeFor(ctx.cwd);
-		const task = store.current();
-		// Before task_set the Owner prompt is the only guard: exploration must stay unhindered.
-		if (!task) return;
-		const all = discoverVerifiers(ctx.cwd);
-		const defs = verifiersForGate(all, "design");
-		const design = await store.gateReport("design", defs.map((v) => v.name), new Map(defs.map((v) => [v.name, v.fingerprint])));
-		if (!design.holds) return { block: true, reason: `Blocked ${event.toolName}: the design gate does not hold. Next: finish design review.` };
-		if ((await store.currentBranch()) === task.baseBranch) {
-			return { block: true, reason: `Blocked ${event.toolName} on base branch ${task.baseBranch}. Next: git switch -c <work-branch>.` };
-		}
+		if (activeProtected) return { block: true, reason: `Blocked ${event.toolName}: verdict sourcing is in flight; it lifts as soon as the verdicts land.` };
+		// Gates are the Owner's to self-impose — the prompt sequences design → gate →
+		// implement, and task_complete enforces both gates mechanically at the end.
+		// The harness never blocks work mid-task; it only serializes mutations against
+		// verdict sourcing so verdicts stay pinned to a stable tree.
 		activeMutations.add(callId);
 	});
 	pi.on("tool_execution_end", async (event, ctx) => {

@@ -26,13 +26,17 @@ verdicts.
    Owner's job, proactively.
 6. **Everything that can run in parallel does.** Verifier panels always fan out in
    parallel; independent workers run in parallel.
-7. **The process is enforced by code, not by prompt.** The state machine lives in the
-   extension. The Owner cannot advance phases by rhetoric; `gate_status` / phase
-   transitions recompute hashes and verify verdicts mechanically. One deliberate
-   exception: `bash` is the Owner's inspection surface and is never gated — it is only
-   serialized against verdict sourcing. The Owner prompt, not the harness, keeps
-   implementation out of bash before a gate holds; gate and base-branch blocks apply to
-   the mutation tools (edit, write).
+7. **Completion is enforced by code; sequencing is self-imposed by the Owner.** The
+   state machine and hash pinning live in the extension, and `task_complete` refuses to
+   close the task unless both gates hold with fresh all-GO verdicts — that part the Owner
+   cannot advance by rhetoric. Mid-task, though, the harness never blocks work: the
+   harness is a poor judge of which mutation is legitimate (an appended requirement
+   stales a gate the moment before a write lands, and the write is usually still the
+   right next step). The Owner prompt owns the sequencing discipline; the only mid-task
+   interlock is concurrency — mutations and verdict sourcing never overlap, so verdicts
+   are always pinned to a stable tree. Worker isolation is likewise the Owner's explicit
+   `isolated: true` choice at dispatch (a disposable clone for research and spikes),
+   never inferred from gate state.
 
 ## Roles
 
@@ -206,14 +210,19 @@ status/task/verdict/activity/spend contract, renders the full task board, and su
 session-resuming RPC Owner. Append and kill controls go through Owner RPC; the cockpit does
 not mutate canonical task files.
 
-The board is a full-screen themed TUI: a branded header carries the task id, lifecycle
-phase, and owner liveness; bordered panels carry the task statement and requirements, both
-gates (side by side from 64 columns, stacked below), blockers, running children, and
-spend; a footer pins feedback, the scroll position, and key hints. Verifier states paint
-as ✓ GO / ✗ NO-GO / ⚠ stale / ○ pending, with a spinner animating reviewing verifiers and
-running children. Rendering is dependency-free and deterministic — styling flows through a
-palette shim (the identity palette renders plain text for tests), layout is computed on
-plain text before painting, and every line is bounded to the terminal width at any size.
+The board is a full-screen, keyboard-navigable tree. A branded header carries the task
+id, lifecycle phase, and owner liveness; the body is collapsible sections — task, both
+gates, blockers, activity, spend — each folding to a one-line summary with counters, so a
+hard task fits one screen until the user drills in. Defaults encode attention: a holding
+gate folds to `✓ HOLDS`, an unheld gate opens; blockers and activity open, the task folds
+to its statement preview. Verifier rows paint ✓ GO / ✗ NO-GO / ⚠ stale / ○ pending (a
+spinner animates reviewing), preview their first comment inline, and expand to the full
+wrapped text. A focus cursor (`❯`) moves over nodes, the viewport follows it, and
+expansion state and focus survive disk refreshes by node id. A footer pins feedback, the
+position, and key hints. Rendering is dependency-free and deterministic — styling flows
+through a palette shim (the identity palette renders plain text for tests), layout is
+computed on plain text before painting, and every line is bounded to the terminal width
+at any size.
 
 ## Self-verification (acceptance test for this project)
 

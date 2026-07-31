@@ -1,16 +1,18 @@
 # Verification
 
-Completed on `main` (full-screen themed cockpit + ungated bash):
+Completed on `main` (Owner-imposed gates + navigable board):
 
-- `node --test test/unit.ts` — **36 passed, 0 failed** (includes new side-by-side layout
-  and palette-painting coverage).
-- Rendered-surface inspection of the board via a scripted snapshot at 20, 48, 80, and 120
-  columns with a real ANSI palette — hierarchy, spacing/alignment, color states, and the
-  fixed footer verified at every width; an exhaustive audit found zero lines exceeding the
-  terminal width across widths 20–120 and all four spinner frames.
-- Bash gating: `bash` is exempt from the pre-task, design-gate, and base-branch blocks
-  (still serialized against verdict sourcing); edit/write remain gated. DESIGN.md §7
-  records the rationale.
+- `node --test test/unit.ts` — all passing (board navigation, layout bounds, palette
+  painting, state store, verdict parsing, verifier discovery, supervisor RPC).
+- Gating: the harness no longer blocks any tool mid-task. `task_complete` still refuses
+  unless both gates hold with fresh all-GO verdicts; mutations and verdict sourcing are
+  serialized against each other. Worker isolation is an explicit `isolated: true` dispatch
+  parameter (disposable clone, changes discarded) instead of being inferred from design-gate
+  state — inference would silently discard implementation work. DESIGN.md §7 records the
+  rationale; prompts/agents/owner.md carries the self-imposed sequencing discipline.
+- Board: keyboard-navigable collapsible tree (focus cursor, ⏎/←/→ folding, viewport
+  follows focus); rendered-surface audit at 20/48/80/120 columns across all spinner frames
+  with zero width overflows.
 
 No remote CI is configured; local tests, the rendered-surface audit, and this record are
 the review equivalent.

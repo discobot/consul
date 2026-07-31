@@ -218,6 +218,12 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 				}),
 				{ description: "Workers to run in parallel" },
 			),
+			isolated: Type.Optional(
+				Type.Boolean({
+					description:
+						"Run this batch in a disposable clone of the repo (default false). All worktree changes are discarded when the batch ends — use for research, spikes, and destructive experiments; never for implementation work you intend to keep.",
+				}),
+			),
 		}),
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const store = storeFor(ctx.cwd);
@@ -236,13 +242,9 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 				}
 			}
 			const context = await buildTaskContext(store, task);
-			const all = discoverVerifiers(ctx.cwd);
-			const designDefs = verifiersForGate(all, "design");
-			const designReport = await store.gateReport("design", designDefs.map((v) => v.name), fingerprints(designDefs));
-			if (designReport.holds && (await store.currentBranch()) === task.baseBranch) {
-				throw new Error(`Implementation workers are blocked on base branch ${task.baseBranch}. Next: switch to a dedicated work branch.`);
-			}
-			const isolatedRoot = designReport.holds ? undefined : fs.mkdtempSync(path.join(os.tmpdir(), "council-worker-"));
+			// Isolation is the Owner's explicit choice, never inferred from gate state:
+			// an inferred isolated clone would silently discard implementation work.
+			const isolatedRoot = params.isolated ? fs.mkdtempSync(path.join(os.tmpdir(), "council-worker-")) : undefined;
 			if (isolatedRoot) execFileSync("git", ["clone", "--quiet", "--no-hardlinks", store.cwd, isolatedRoot]);
 			const { concurrency, timeoutMs, inactivityMs } = childSettings(ctx);
 
