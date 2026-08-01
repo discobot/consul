@@ -591,7 +591,8 @@ export class OwnerSupervisor {
 	private restartState: RestartState = { attempts: 0 };
 	private stopped = false;
 	private ready = false;
-	private revived = false;
+	/** lastTurnAt value at the previous revive; re-arm only after a newer turn lands. */
+	private lastRevive?: string;
 	private sequence = 0;
 	private pending = new Map<string, (ok: boolean, error?: string) => void>();
 	private queuedAppends: { text: string; resolve: (message: string) => void }[] = [];
@@ -664,7 +665,10 @@ export class OwnerSupervisor {
 		if (isSleepJump(this.expectedTick, now) || now - this.lastEvent > INACTIVITY_MS) {
 			this.changed(isSleepJump(this.expectedTick, now) ? "Sleep/wake detected; restarting Owner…" : "Owner heartbeat timed out; restarting…");
 			this.terminate();
-		} else if (this.child) void this.send("get_state", {});
+		} else if (this.child) {
+			void this.send("get_state", {});
+			this.reviveIfStalled();
+		}
 		this.expectedTick = now + HEARTBEAT_MS;
 	}
 
@@ -719,18 +723,21 @@ export class OwnerSupervisor {
 	}
 
 	/**
-	 * Opening the board over a stalled task revives it: when the last finished run is
-	 * old, send /task-resume through the Owner (a command, so no requirement is
-	 * appended). Once per board lifetime — supervisor respawns must not re-trigger it.
+	 * The board resuscitates a stalled task: when the last finished run is old, send
+	 * /task-resume through the Owner (a command, so no requirement is appended). After a
+	 * revive it re-arms only once a newer run lands — so a marathon turn or a dead-slow
+	 * Owner gets at most one queued nudge per stall, never a drumbeat.
 	 */
 	private reviveIfStalled(): void {
-		if (this.revived) return;
+		if (!this.ready) return;
 		let snapshot: BoardSnapshot;
 		try { snapshot = loadCockpitSnapshot(this.cwd); } catch { return; }
 		if (!snapshot.active) return;
+		const marker = snapshot.lastTurnAt ?? "(no runs)";
+		if (this.lastRevive === marker) return;
 		const age = snapshot.lastTurnAt ? Date.now() - Date.parse(snapshot.lastTurnAt) : Number.POSITIVE_INFINITY;
 		if (!Number.isNaN(age) && age < REVIVE_AFTER_MS) return;
-		this.revived = true;
+		this.lastRevive = marker;
 		void this.send("prompt", { message: "/task-resume", streamingBehavior: "followUp" })
 			.then((ok) => this.changed(ok ? "Owner looked stalled — sent /task-resume" : "Owner stalled; /task-resume delivery failed"));
 	}

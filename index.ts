@@ -50,7 +50,12 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.mode !== "tui" || (event.reason !== "startup" && event.reason !== "resume")) return;
 		const task = (() => { try { return store.current(); } catch { return null; } })();
 		if (task?.status === "active") {
-			pi.sendUserMessage(RESUME_NUDGE, { deliverAs: "followUp" });
+			// session_start fires before pi can accept prompts; a nudge sent synchronously
+			// here is silently dropped. Defer past initialization.
+			// session_start is too early for prompts; a session interrupted mid-turn
+			// auto-continues on its own, and the board supervisor revives idle ones.
+			// This deferred nudge covers the interactive cleanly-idle case.
+			setTimeout(() => pi.sendUserMessage(RESUME_NUDGE, { deliverAs: "followUp" }), 2_000);
 			ctx.ui.notify(`Resuming task #${task.id} — messages append requirements; /task-kill abandons.`, "info");
 		}
 	});
