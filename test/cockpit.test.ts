@@ -286,6 +286,27 @@ test("Owner supervisor delivers multiple queued RPC appends without hanging", as
 	}
 });
 
+test("board supervisor revives a stalled Owner once via /task-resume", async () => {
+	const { cwd } = fixture(); // active task, no spend ledger → stalled by definition
+	const script = path.join(cwd, "fake-owner.mjs");
+	const log = path.join(cwd, "received.jsonl");
+	fs.writeFileSync(script, `import fs from "node:fs"; let b=""; process.stdin.on("data",(d)=>{b+=d; let i; while((i=b.indexOf("\\n"))>=0){const m=JSON.parse(b.slice(0,i)); b=b.slice(i+1); fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(m)+"\\n"); setTimeout(()=>console.log(JSON.stringify({type:"response",id:m.id,success:true})),10)}});`);
+	const previous = process.env.COUNCIL_PI;
+	process.env.COUNCIL_PI = script;
+	const supervisor = new OwnerSupervisor(cwd, path.join(cwd, "index.ts"), () => {});
+	try {
+		supervisor.start();
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		const received = fs.readFileSync(log, "utf8");
+		assert.match(received, /task-resume/, "stalled Owner receives the resume command");
+		assert.equal(received.match(/task-resume/g)?.length, 1, "revive fires exactly once");
+	} finally {
+		supervisor.stop();
+		if (previous === undefined) delete process.env.COUNCIL_PI; else process.env.COUNCIL_PI = previous;
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("restart backoff is bounded/resettable and sleep jumps are explicit", () => {
 	let state = { attempts: 0, lastStartedAt: 1_000 };
 	let restart = nextRestart(state, 2_000);

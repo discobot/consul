@@ -579,6 +579,9 @@ export class JsonlDecoder {
 	}
 }
 
+/** An Owner whose last finished run is older than this is considered stalled. */
+const REVIVE_AFTER_MS = 10 * 60_000;
+
 export class OwnerSupervisor {
 	private child?: ChildProcessWithoutNullStreams;
 	private heartbeat?: ReturnType<typeof setInterval>;
@@ -588,6 +591,7 @@ export class OwnerSupervisor {
 	private restartState: RestartState = { attempts: 0 };
 	private stopped = false;
 	private ready = false;
+	private revived = false;
 	private sequence = 0;
 	private pending = new Map<string, (ok: boolean, error?: string) => void>();
 	private queuedAppends: { text: string; resolve: (message: string) => void }[] = [];
@@ -652,7 +656,7 @@ export class OwnerSupervisor {
 			this.pending.clear();
 			if (!this.stopped) this.scheduleRestart();
 		});
-		this.send("get_state", {}).then((ok) => { if (ok) { this.ready = true; this.changed("Owner connected"); this.flushQueuedAppend(); } });
+		this.send("get_state", {}).then((ok) => { if (ok) { this.ready = true; this.changed("Owner connected"); this.flushQueuedAppend(); this.reviveIfStalled(); } });
 	}
 
 	private tick(): void {
@@ -712,6 +716,23 @@ export class OwnerSupervisor {
 		if (!this.ready || this.queuedAppends.length === 0) return;
 		const queued = this.queuedAppends.shift()!;
 		this.promptAppend(queued.text).then((message) => { queued.resolve(message); this.flushQueuedAppend(); });
+	}
+
+	/**
+	 * Opening the board over a stalled task revives it: when the last finished run is
+	 * old, send /task-resume through the Owner (a command, so no requirement is
+	 * appended). Once per board lifetime — supervisor respawns must not re-trigger it.
+	 */
+	private reviveIfStalled(): void {
+		if (this.revived) return;
+		let snapshot: BoardSnapshot;
+		try { snapshot = loadCockpitSnapshot(this.cwd); } catch { return; }
+		if (!snapshot.active) return;
+		const age = snapshot.lastTurnAt ? Date.now() - Date.parse(snapshot.lastTurnAt) : Number.POSITIVE_INFINITY;
+		if (!Number.isNaN(age) && age < REVIVE_AFTER_MS) return;
+		this.revived = true;
+		void this.send("prompt", { message: "/task-resume", streamingBehavior: "followUp" })
+			.then((ok) => this.changed(ok ? "Owner looked stalled — sent /task-resume" : "Owner stalled; /task-resume delivery failed"));
 	}
 
 	killTask(): Promise<string> {

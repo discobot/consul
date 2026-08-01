@@ -37,9 +37,7 @@ export default function (pi: ExtensionAPI) {
 	const ownerPrompt = fs.readFileSync(OWNER_PROMPT_PATH, "utf-8");
 
 	pi.on("session_start", async (event, ctx) => {
-		// Read the previous owner's heartbeat before our own refresh overwrites it.
 		const store = storeFor(ctx.cwd);
-		const previousBeat = (() => { try { return store.readStatus()?.heartbeatAt; } catch { return undefined; } })();
 		try { store.clearActivity(); } catch { /* no task yet */ }
 		ui.refresh(ctx);
 		if (heartbeat) clearInterval(heartbeat);
@@ -47,12 +45,11 @@ export default function (pi: ExtensionAPI) {
 		heartbeat.unref?.();
 		// Resume-in-place: an interactive session opened over an active task continues it
 		// automatically (picker → enter → work resumes). Never in RPC mode — the board
-		// supervisor respawns its Owner constantly and must not trigger turns — and never
-		// when another live Owner is already heartbeating on this task.
+		// supervisor respawns its Owner constantly and must not trigger turns there.
+		// Running two interactive sessions on one task is the user's call to avoid.
 		if (ctx.mode !== "tui" || (event.reason !== "startup" && event.reason !== "resume")) return;
 		const task = (() => { try { return store.current(); } catch { return null; } })();
-		const anotherOwnerLive = Boolean(previousBeat && Date.now() - Date.parse(previousBeat) <= 15_000);
-		if (task?.status === "active" && !anotherOwnerLive) {
+		if (task?.status === "active") {
 			pi.sendUserMessage(RESUME_NUDGE, { deliverAs: "followUp" });
 			ctx.ui.notify(`Resuming task #${task.id} — messages append requirements; /task-kill abandons.`, "info");
 		}
