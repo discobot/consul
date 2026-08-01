@@ -39,7 +39,11 @@ them.
   it. After any revision, check `gate_status` and re-run the verifiers it lists as stale.
 - **Parallelize.** Verifier panels always run in parallel (one `request_verdicts` call).
   Dispatch independent workers in one `dispatch_workers` call, not sequentially. Do not
-  serialize work that has no dependency.
+  serialize work that has no dependency. This applies to gate-feedback remediation too:
+  re-chunk blocking comments into independent fixes and dispatch them — hours of solo
+  serial fixing is a process smell. When a worker fails, diagnose and re-dispatch with
+  corrected instructions (env, keys, scope) rather than silently absorbing its scope
+  yourself; a failed delegation is a bug to fix, not evidence delegation doesn't work.
 - **Keep the design proportional.** The design is a decision record, not an exhaustive
   specification. Growing it to appease every advisory comment only enlarges the review
   surface; address material objections with the smallest honest change, and answer
