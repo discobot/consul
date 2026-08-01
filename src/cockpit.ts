@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { LaunchStore, type StatusGate } from "./state.ts";
+import { LaunchStore, type StatusGate, totalSpend } from "./state.ts";
 
 export type BoardState = "GO" | "NO-GO" | "stale" | "pending" | "reviewing";
 
@@ -17,6 +17,7 @@ export interface BoardVerifier {
 export interface BoardChild {
 	name: string;
 	status: string;
+	since?: string;
 }
 
 export interface BoardSnapshot {
@@ -29,6 +30,7 @@ export interface BoardSnapshot {
 	blockers: string[];
 	children: BoardChild[];
 	spend: { cost: number; tokens: number; entries: number };
+	lastTurnAt?: string;
 	design: string;
 	connected: boolean;
 	updatedAt?: string;
@@ -59,7 +61,8 @@ export function loadCockpitSnapshot(cwd: string, now = Date.now()): BoardSnapsho
 		if (!task) return { active: false, statement: "No active task — close the board and start one in an Owner session", requirements: [], phase: "IDLE", gates: { design: [], implementation: [] }, blockers: [], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: true, errors };
 		const status = store.readStatus();
 		const activity = store.readActivity();
-		const totals = store.spendTotals();
+		const spendEntries = store.loadSpend();
+		const totals = totalSpend(spendEntries);
 		const heartbeat = status?.heartbeatAt;
 		const connected = task.status !== "active" || Boolean(heartbeat && now - Date.parse(heartbeat) <= STATUS_STALE_MS);
 		const rows = (gate?: StatusGate): BoardVerifier[] => gate?.verifiers.map((verifier) => ({ name: verifier.name, state: stateName(verifier.state), comments: verifier.comments ?? [] })) ?? [];
@@ -71,8 +74,9 @@ export function loadCockpitSnapshot(cwd: string, now = Date.now()): BoardSnapsho
 			phase: task.status === "done" ? "DONE" : task.status === "killed" ? "KILLED" : status?.phase ?? "UNKNOWN",
 			gates: { design: rows(status?.design), implementation: rows(status?.implementation) },
 			blockers: status?.blockers ?? (task.status === "active" ? ["Gate status unavailable until the Owner reconnects"] : []),
-			children: activity?.children.map((child) => ({ name: child.name, status: child.detail ?? child.status })) ?? [],
+			children: activity?.children.map((child) => ({ name: child.name, status: child.detail ?? child.status, since: child.startedAt })) ?? [],
 			spend: { cost: totals.costUsd, tokens: totals.tokens.total, entries: totals.runs },
+			lastTurnAt: spendEntries.at(-1)?.at,
 			design: store.readDesign() ?? "",
 			connected,
 			updatedAt: heartbeat,
@@ -226,6 +230,8 @@ export interface BoardNode {
 
 function expandable(node: BoardNode): boolean { return Boolean(node.children?.length || node.details?.length); }
 
+function clock(iso?: string): string { return iso && iso.length >= 19 ? iso.slice(11, 19) : (iso ?? "—"); }
+
 export function buildBoardNodes(snapshot: BoardSnapshot, frame = 0): BoardNode[] {
 	const nodes: BoardNode[] = [];
 	if (!snapshot.taskId) {
@@ -279,16 +285,24 @@ export function buildBoardNodes(snapshot: BoardSnapshot, frame = 0): BoardNode[]
 				summary: [span("✗ ", "error", true), span(clean(blocker))],
 				details: [{ text: blocker, prefix: "" }],
 			})),
-			defaultExpanded: true,
+			// Blockers duplicate the gate comments; the count is the signal, drill in for text.
+			defaultExpanded: false,
 		});
-		if (snapshot.children.length) nodes.push({
+		const running = snapshot.children.length;
+		const pulse = snapshot.spend.entries
+			? `Owner — ${snapshot.spend.entries} runs · last finished ${clock(snapshot.lastTurnAt)}`
+			: "Owner — no runs recorded yet";
+		nodes.push({
 			id: "activity",
-			summary: [span("Activity", "accent", true), span(` · ${snapshot.children.length} running`, "muted")],
-			children: snapshot.children.map((child) => ({
-				id: `child:${child.name}`,
-				summary: [span(`${SPINNER[frame % SPINNER.length]} `, "accent", true), span(`${child.name} — ${clean(child.status)}`)],
-				details: [{ text: `${child.name} — ${child.status}`, prefix: "" }],
-			})),
+			summary: [span("Activity", "accent", true), span(running ? ` · ${running} running` : " · owner only", "muted")],
+			children: [
+				{ id: "owner-pulse", summary: [span("● ", snapshot.connected ? "success" : "warning", true), span(pulse)] },
+				...snapshot.children.map((child) => ({
+					id: `child:${child.name}`,
+					summary: [span(`${SPINNER[frame % SPINNER.length]} `, "accent", true), span(`${child.name} — ${clean(child.status)}${child.since ? ` · since ${clock(child.since)}` : ""}`)],
+					details: [{ text: `${child.name} — ${child.status}`, prefix: "" }],
+				})),
+			],
 			defaultExpanded: true,
 		});
 		const spendText = `$${snapshot.spend.cost.toFixed(4)} · ${snapshot.spend.tokens.toLocaleString("en-US")} tokens · ${snapshot.spend.entries} runs`;
@@ -337,9 +351,12 @@ export function renderHeader(snapshot: BoardSnapshot, width: number, palette: Pa
 	return [...packSpanCells(cells, width).map((row) => paint(row, palette)), paint([span("─".repeat(width), BORDER)], palette)];
 }
 
+/** Reading width cap: ultra-wide terminals get a readable column, not 300-cell lines. */
+const MAX_BOARD_WIDTH = 120;
+
 /** The complete board, fully expanded — reference rendering and test surface. */
 export function renderCockpit(snapshot: BoardSnapshot, width: number, palette: Palette = PLAIN_PALETTE, frame = 0): string[] {
-	width = Math.max(1, width);
+	width = Math.max(1, Math.min(width, MAX_BOARD_WIDTH));
 	const rows = flattenBoardNodes(buildBoardNodes(snapshot, frame), width, () => true);
 	return [...renderHeader(snapshot, width, palette, frame), ...rows.map((row) => paint(fitSpans(row.spans, width), palette))];
 }
@@ -412,7 +429,7 @@ export class BoardView {
 	}
 
 	renderPage(snapshot: BoardSnapshot, width: number, height: number, feedback = "", palette: Palette = PLAIN_PALETTE, frame = 0): string[] {
-		width = Math.max(1, width);
+		width = Math.max(1, Math.min(width, MAX_BOARD_WIDTH));
 		height = Math.max(4, height);
 		const header = renderHeader(snapshot, width, palette, frame);
 		const rows = this.rowsFor(snapshot, width, frame);
@@ -672,8 +689,11 @@ function watchState(cwd: string, changed: () => void): () => void {
 
 export default function cockpit(pi: ExtensionAPI): void {
 	let cleanup: (() => void) | undefined;
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
+		// Key parsing must go through pi-tui so the Kitty keyboard protocol (Ghostty,
+		// kitty) works; imported dynamically so bare-node unit tests can import this module.
+		const { matchesKey, isKeyRelease } = await import("@earendil-works/pi-tui");
 		let snapshot = loadCockpitSnapshot(ctx.cwd);
 		let feedback = "Owner starting…";
 		let tuiRender = () => {};
@@ -695,23 +715,26 @@ export default function cockpit(pi: ExtensionAPI): void {
 				render: (width: number) => view.renderPage(snapshot, width, Math.max(8, (process.stdout.rows ?? 24) - 2), feedback, palette, frame),
 				invalidate() { snapshot = loadCockpitSnapshot(ctx.cwd); },
 				handleInput(data: string) {
-					if (["j", "J", "\u001b[B"].includes(data)) { view.move(1); tui.requestRender(); return; }
-					if (["u", "U", "\u001b[A"].includes(data)) { view.move(-1); tui.requestRender(); return; }
-					if (data === "\r" || data === "\n" || data === " ") { view.toggle(); tui.requestRender(); return; }
-					if (data === "l" || data === "\u001b[C") { view.expand(); tui.requestRender(); return; }
-					if (data === "h" || data === "\u001b[D") { view.collapse(); tui.requestRender(); return; }
-					if (data === "\u001b[6~") { view.movePage(1); tui.requestRender(); return; }
-					if (data === "\u001b[5~") { view.movePage(-1); tui.requestRender(); return; }
-					if (data === "g" || data === "\u001b[H") { view.first(); tui.requestRender(); return; }
-					if (data === "G" || data === "\u001b[F") { view.last(); tui.requestRender(); return; }
-					if (data === "q" || data === "Q" || data === "\u001b") { clearInterval(spinner); cleanup?.(); done(undefined); ctx.shutdown(); return; }
-					if (snapshot.active && (data === "a" || data === "A")) void ctx.ui.input("Append requirement", "The Owner will record and propagate this requirement").then((text) => {
+					if (isKeyRelease(data)) return;
+					const is = (id: string): boolean => matchesKey(data, id as never);
+					const rerender = () => tui.requestRender();
+					if (is("down") || is("j") || is("shift+j")) { view.move(1); rerender(); return; }
+					if (is("up") || is("u") || is("shift+u")) { view.move(-1); rerender(); return; }
+					if (is("enter") || is("space")) { view.toggle(); rerender(); return; }
+					if (is("right") || is("l")) { view.expand(); rerender(); return; }
+					if (is("left") || is("h")) { view.collapse(); rerender(); return; }
+					if (is("pageDown")) { view.movePage(1); rerender(); return; }
+					if (is("pageUp")) { view.movePage(-1); rerender(); return; }
+					if (is("g") || is("home")) { view.first(); rerender(); return; }
+					if (is("shift+g") || is("end")) { view.last(); rerender(); return; }
+					if (is("q") || is("shift+q") || is("escape")) { clearInterval(spinner); cleanup?.(); done(undefined); ctx.shutdown(); return; }
+					if (snapshot.active && (is("a") || is("shift+a"))) void ctx.ui.input("Append requirement", "The Owner will record and propagate this requirement").then((text) => {
 						if (!text?.trim()) return;
 						feedback = "Requirement sending…";
 						tui.requestRender();
 						supervisor.append(text.trim()).then((message) => { feedback = message; tui.requestRender(); });
 					});
-					if (snapshot.active && (data === "k" || data === "K")) void ctx.ui.confirm("Kill task?", "This permanently ends the task but keeps all records.").then((confirmed) => {
+					if (snapshot.active && (is("k") || is("shift+k"))) void ctx.ui.confirm("Kill task?", "This permanently ends the task but keeps all records.").then((confirmed) => {
 						if (confirmed) supervisor.killTask().then((message) => { feedback = message; tui.requestRender(); });
 					});
 				},

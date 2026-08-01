@@ -72,8 +72,9 @@ test("snapshot projects status, activity, verdict history, design, and spend", (
 	assert.deepEqual(snapshot.requirements, ["Show both gates", "Never mutate task files"]);
 	assert.deepEqual(snapshot.gates.design.map((row) => [row.name, row.state]), [["clean-code", "GO"]]);
 	assert.deepEqual(snapshot.gates.implementation[0].comments, ["Fix RPC framing"]);
-	assert.deepEqual(snapshot.children, [{ name: "worker:rpc", status: "running" }]);
+	assert.deepEqual(snapshot.children, [{ name: "worker:rpc", status: "running", since: "now" }]);
 	assert.deepEqual(snapshot.spend, { cost: 0.3, tokens: 1500, entries: 2 });
+	assert.equal(snapshot.lastTurnAt, "now", "the last spend entry timestamps the owner pulse");
 	assert.equal(snapshot.design, "# Cockpit\n");
 	fs.rmSync(cwd, { recursive: true, force: true });
 });

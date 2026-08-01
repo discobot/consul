@@ -214,8 +214,12 @@ The board is a full-screen, keyboard-navigable tree. A branded header carries th
 id, lifecycle phase, and owner liveness; the body is collapsible sections — task, both
 gates, blockers, activity, spend — each folding to a one-line summary with counters, so a
 hard task fits one screen until the user drills in. Defaults encode attention: a holding
-gate folds to `✓ HOLDS`, an unheld gate opens; blockers and activity open, the task folds
-to its statement preview. Verifier rows paint ✓ GO / ✗ NO-GO / ⚠ stale / ○ pending (a
+gate folds to `✓ HOLDS`, an unheld gate opens; blockers fold to their count (they mirror
+gate comments), the task folds to its statement preview, and activity opens with an
+always-present Owner pulse row (run count and last finished turn) plus one row per
+running child. Key input parses through pi-tui (`matchesKey`), so navigation works under
+the Kitty keyboard protocol; content width is capped at 120 columns for readability on
+ultra-wide terminals. Verifier rows paint ✓ GO / ✗ NO-GO / ⚠ stale / ○ pending (a
 spinner animates reviewing), preview their first comment inline, and expand to the full
 wrapped text. A focus cursor (`❯`) moves over nodes, the viewport follows it, and
 expansion state and focus survive disk refreshes by node id. A footer pins feedback, the

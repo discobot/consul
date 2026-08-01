@@ -45,8 +45,10 @@ Then, in a git repository with at least one commit:
   a full-screen, keyboard-navigable TUI: the task, both gates, blockers, running children,
   and spend are collapsible tree sections with colored ✓/✗/⚠/○ verifier states and a live
   spinner while reviews run. Healthy sections fold to one line (a holding gate is a single
-  `✓ HOLDS` row) so hard tasks stay on one screen; NO-GO verifiers preview their first
-  comment and expand to the full text. Move with ↑/↓ (or j/u), toggle with Enter/Space,
+  `✓ HOLDS` row, blockers fold to their count) so hard tasks stay on one screen; NO-GO
+  verifiers preview their first comment and expand to the full text, and the activity
+  section always shows the Owner's pulse (run count, last finished turn) beside any
+  running children. Content is capped at a readable 120 columns on ultra-wide terminals. Move with ↑/↓ (or j/u), toggle with Enter/Space,
   fold with ←/→ (← climbs to the parent), page with PgUp/PgDn, jump with g/G, `a` to
   append, `k` to kill with confirmation, and q/Esc to close. State is plain files under
   `.pi/council/tasks/<id>/`, including verdict, activity, status, and spend projections.
