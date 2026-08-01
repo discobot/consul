@@ -101,8 +101,10 @@ blocks rather than approving from code alone.
 
 `concurrency` defaults to 9, allowing the full built-in implementation panel to run in one
 parallel round. `timeoutMinutes` is the absolute child runtime cap. `inactivityMinutes`
-(default 3, valid 0.1–120) terminates a child that emits no JSONL events; sleep/wake clock jumps also fail
-in-flight children so missing verdicts can be re-sourced after resume.
+(default 10, valid 0.1–120) terminates a child that emits no JSONL events — streamed tool
+output counts, so foreground jobs with visible progress stay alive while genuinely hung
+children die; sleep/wake clock jumps also fail in-flight children so missing verdicts can
+be re-sourced after resume.
 
 Verifier model precedence is frontmatter, named `verifierModels`, `verifierModel`, shared
 `model`, then the session model. Worker entry overrides precede `workerModel` and shared

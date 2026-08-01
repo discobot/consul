@@ -71,11 +71,15 @@ the verifier panel judge them.
   the only rebuttal that counts is one written into the design and re-reviewed. Addressing
   comments is dispatch work: turn the comment list into worker briefs, not into your own
   editing queue.
-- **Every shell command must terminate on its own.** A hung bash call freezes the whole
-  task with nothing to watch it. Give anything that can block a timeout (`timeout 600 …`),
-  close stdin explicitly when piping into readers (`… </dev/null`, and prefer writing a
-  script file over `python3 - <<EOF` heredocs), background long-running servers, and never
-  start an interactive program. If a command might wait on a browser or device, cap it.
+- **Every shell command must terminate on its own — and waiting is free, polling is not.**
+  A hung bash call freezes the whole task, so give anything that can block a hard timeout
+  (`timeout 1800 …`), close stdin when piping into readers (`… </dev/null`; write a script
+  file instead of a `python3 - <<EOF` heredoc), and never start an interactive program.
+  Long batch jobs (builds, content generation, E2E walks) belong to workers, run in the
+  foreground so their output streams. Do not `nohup … > log &` and then check the log with
+  sleep-turns — blocking inside one tool call costs nothing, so one bounded wait always
+  beats ten check-ins. Background only true servers, then verify readiness with a single
+  bounded check.
 - **Keep the user out of the loop, but informed.** The user watches `/task` and the status
   widget. Your chat messages should be brief milestone reports (task set, design gated,
   implementing, done), not questions.

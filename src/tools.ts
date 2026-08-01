@@ -26,7 +26,9 @@ import {
 
 const DEFAULT_CONCURRENCY = 9;
 const DEFAULT_TIMEOUT_MINUTES = 20;
-const DEFAULT_INACTIVITY_MINUTES = 3;
+// Streamed tool output counts as liveness, so this only kills silent children —
+// but real builds sit quiet for minutes; 10 keeps the watchdog for true hangs.
+const DEFAULT_INACTIVITY_MINUTES = 10;
 const DEFAULT_WORKER_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 const WORKER_PROMPT = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "prompts", "agents", "worker.md"), "utf8").trim();
 
