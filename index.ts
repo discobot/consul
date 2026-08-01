@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { storeFor } from "./src/state.ts";
 import { registerTools } from "./src/tools.ts";
-import { createStatusUI } from "./src/ui.ts";
+import { RESUME_NUDGE, createStatusUI } from "./src/ui.ts";
 import { discoverVerifiers, verifiersForGate } from "./src/verifiers.ts";
 
 const OWNER_PROMPT_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "prompts", "agents", "owner.md");
@@ -36,12 +36,26 @@ export default function (pi: ExtensionAPI) {
 
 	const ownerPrompt = fs.readFileSync(OWNER_PROMPT_PATH, "utf-8");
 
-	pi.on("session_start", async (_event, ctx) => {
-		try { storeFor(ctx.cwd).clearActivity(); } catch { /* no task yet */ }
+	pi.on("session_start", async (event, ctx) => {
+		// Read the previous owner's heartbeat before our own refresh overwrites it.
+		const store = storeFor(ctx.cwd);
+		const previousBeat = (() => { try { return store.readStatus()?.heartbeatAt; } catch { return undefined; } })();
+		try { store.clearActivity(); } catch { /* no task yet */ }
 		ui.refresh(ctx);
 		if (heartbeat) clearInterval(heartbeat);
 		heartbeat = setInterval(() => ui.refresh(ctx), 5_000);
 		heartbeat.unref?.();
+		// Resume-in-place: an interactive session opened over an active task continues it
+		// automatically (picker → enter → work resumes). Never in RPC mode — the board
+		// supervisor respawns its Owner constantly and must not trigger turns — and never
+		// when another live Owner is already heartbeating on this task.
+		if (ctx.mode !== "tui" || (event.reason !== "startup" && event.reason !== "resume")) return;
+		const task = (() => { try { return store.current(); } catch { return null; } })();
+		const anotherOwnerLive = Boolean(previousBeat && Date.now() - Date.parse(previousBeat) <= 15_000);
+		if (task?.status === "active" && !anotherOwnerLive) {
+			pi.sendUserMessage(RESUME_NUDGE, { deliverAs: "followUp" });
+			ctx.ui.notify(`Resuming task #${task.id} — messages append requirements; /task-kill abandons.`, "info");
+		}
 	});
 	pi.on("session_shutdown", () => { if (heartbeat) clearInterval(heartbeat); });
 	pi.on("message_end", (event, ctx) => {

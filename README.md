@@ -39,9 +39,13 @@ Then, in a git repository with at least one commit:
 - **Later messages append requirements** (or ask to kill). You cannot reword the task —
   kill it with `/task-kill` (`/task kill` remains an alias) and start over.
 - **Everything is resumable.** All task state lives on disk and verdicts are pinned to
-  content hashes, so quitting and restarting loses nothing — held gates stay held. Resume
-  the session (`council -c`) and kick the Owner with `/task-resume`: unlike a chat
-  message, it appends no requirement and therefore stales no approvals.
+  content hashes, so quitting and restarting loses nothing — held gates stay held.
+  `council -r` (or `--resume`) opens pi's session picker — pick one, press enter, and it
+  resumes right there: an interactive session opened over an active task nudges the Owner
+  to continue automatically (no requirement is appended, so no approvals stale).
+  `council -c` resumes the latest session the same way, and `/task-resume` re-sends the
+  nudge manually. The auto-nudge never fires for the board's supervised Owner, and it
+  stands down when another live Owner is already heartbeating on the task.
 - **Watch progress** in the status widget above the editor, or with `/task` for the full
   report (requirements, per-verifier gate states, blocking comments, and spend), or run
   `council board` for the dedicated cockpit. The board reads disk state, supervises an RPC

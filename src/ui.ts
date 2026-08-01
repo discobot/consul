@@ -13,6 +13,9 @@ import { discoverVerifiers, verifiersForGate } from "./verifiers.ts";
 const WIDGET_KEY = "council";
 const REFRESH_THROTTLE_MS = 1000;
 
+export const RESUME_NUDGE =
+	"[council] Resume the active task from its current disk state: check gate_status, continue the work in flight, re-source stale verdicts once their artifacts are settled, and drive the process to completion. Session restarts are a routine part of council operation (upgrades, reboots, user restarts) — nothing crashed, so skip any incident analysis and just continue. This nudge is not user input — do not record it with task_requirements_add.";
+
 export function compact(text: string, width: number): string {
 	return truncateToWidth(text.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim(), width, "…");
 }
@@ -280,10 +283,7 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 				ctx.ui.notify("No active task to resume.", "info");
 				return;
 			}
-			pi.sendUserMessage(
-				"[council] Resume the active task from its current disk state: check gate_status, continue the work in flight, re-source stale verdicts once their artifacts are settled, and drive the process to completion. Session restarts are a routine part of council operation (upgrades, reboots, user restarts) — nothing crashed, so skip any incident analysis and just continue. This nudge is not user input — do not record it with task_requirements_add.",
-				{ deliverAs: "followUp" },
-			);
+			pi.sendUserMessage(RESUME_NUDGE, { deliverAs: "followUp" });
 			ctx.ui.notify(`Resume nudge sent to the Owner for task #${task.id}.`, "info");
 		},
 	});
