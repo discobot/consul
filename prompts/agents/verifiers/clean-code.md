@@ -33,7 +33,9 @@ Non-negotiable standards:
 At the **design gate** (no code yet): judge whether the proposed structure invites these
 problems — layering, module boundaries, data flow, planned abstractions.
 
-At the **implementation gate**: audit the actual diff against all of the above.
+At the **implementation gate**: audit the implementation as it stands against all of the
+above — the changed files are listed in your task context; read them and enough of their
+surroundings to judge structure, not just the delta.
 
 GO requires: no structural regression; visible opportunities for dramatic simplification
 are pursued or explicitly justified; file-size explosions justified; special-case branching

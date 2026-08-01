@@ -762,11 +762,6 @@ export class LaunchStore {
 			.join("\n");
 	}
 
-	/** Full committed diff since base for implementation-gate review (caller caps size). */
-	async implementationDiff(): Promise<string> {
-		const task = this.mustCurrent();
-		return git(this.cwd, ["diff", "--binary", `${task.baseCommit}..HEAD`, "--", ".", ...RUNTIME_PATHSPECS]);
-	}
 }
 
 const stores = new Map<string, LaunchStore>();

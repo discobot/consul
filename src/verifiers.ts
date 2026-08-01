@@ -12,7 +12,6 @@ import type { Gate, LaunchStore, TaskRecord, Verdict } from "./state.ts";
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"] as const;
 const BROWSER_VERIFIERS = new Set(["design", "ux-bugs", "user-local-pov", "user-global-pov", "visual-design"]);
 const DEFAULT_VERIFIER_TOOLS = [...READ_ONLY_TOOLS];
-const INLINE_DIFF_CAP_BYTES = 60 * 1024;
 const AGENT_PROMPTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "prompts", "agents");
 
 function loadAgentPrompt(name: string): string {
@@ -219,16 +218,11 @@ export async function buildVerifierPrompt(
 		sections.push("", BROWSER_GUIDANCE);
 	}
 	if (gate === "implementation") {
-		const diff = await store.implementationDiff();
-		if (Buffer.byteLength(diff, "utf8") <= INLINE_DIFF_CAP_BYTES) {
-			sections.push("", "## The change under review (diff since task base)", "```diff", diff, "```");
-		} else {
-			sections.push(
-				"",
-				"## The change under review",
-				`The diff since task base commit ${task.baseCommit.slice(0, 8)} is too large to inline. Inspect it yourself, e.g. \`git diff ${task.baseCommit.slice(0, 8)} --stat\` and then per-file.`,
-			);
-		}
+		sections.push(
+			"",
+			"## The change under review",
+			`Judge the implementation as it stands in the repository, not a patch. The files changed since task base ${task.baseCommit.slice(0, 8)} are listed under Repository status above — read them (and enough of their surroundings) yourself.`,
+		);
 	}
 	sections.push("", VERDICT_RESPONSE_PROTOCOL);
 	return sections.join("\n");
