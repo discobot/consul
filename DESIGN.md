@@ -217,9 +217,14 @@ hard task fits one screen until the user drills in. Defaults encode attention: a
 gate folds to `✓ HOLDS`, an unheld gate opens; blockers fold to their count (they mirror
 gate comments), the task folds to its statement preview, and activity opens with an
 always-present Owner pulse row (run count and last finished turn) plus one row per
-running child. Key input parses through pi-tui (`matchesKey`), so navigation works under
-the Kitty keyboard protocol; content width is capped at 120 columns for readability on
-ultra-wide terminals. Verifier rows paint ✓ GO / ✗ NO-GO / ⚠ stale / ○ pending (a
+running child. Requirements, verifier rows, and blockers carry timestamps — a blocker
+shows when its verdict landed and is flagged when that verdict has gone stale, making it
+visible that the list reflects an old round. Blockers are never dropped manually: they
+are recomputed from the latest verdict per verifier, so a blocker disappears exactly when
+its verifier is re-sourced and returns GO. Tab switches to a Runs view listing recent
+worker and verifier runs from the spend ledger (status, time, cost, newest first). Key
+input parses through pi-tui (`matchesKey`), so navigation works under the Kitty keyboard
+protocol; content width is capped at 120 columns for readability on ultra-wide terminals. Verifier rows paint ✓ GO / ✗ NO-GO / ⚠ stale / ○ pending (a
 spinner animates reviewing), preview their first comment inline, and expand to the full
 wrapped text. A focus cursor (`❯`) moves over nodes, the viewport follows it, and
 expansion state and focus survive disk refreshes by node id. A footer pins feedback, the

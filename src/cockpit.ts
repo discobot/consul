@@ -12,6 +12,8 @@ export interface BoardVerifier {
 	name: string;
 	state: BoardState;
 	comments: string[];
+	/** When this verifier last returned a verdict (from the verdict ledger). */
+	lastRunAt?: string;
 }
 
 export interface BoardChild {
@@ -20,15 +22,21 @@ export interface BoardChild {
 	since?: string;
 }
 
+export interface BoardRequirement { text: string; addedAt?: string }
+export interface BoardBlocker { text: string; at?: string; stale?: boolean }
+/** One finished child run from the spend ledger (workers and verifiers, not Owner turns). */
+export interface BoardRun { at: string; kind: string; name: string; status: string; costUsd: number }
+
 export interface BoardSnapshot {
 	taskId?: string;
 	active: boolean;
 	statement: string;
-	requirements: string[];
+	requirements: BoardRequirement[];
 	phase: string;
 	gates: { design: BoardVerifier[]; implementation: BoardVerifier[] };
-	blockers: string[];
+	blockers: BoardBlocker[];
 	children: BoardChild[];
+	runs: BoardRun[];
 	spend: { cost: number; tokens: number; entries: number };
 	lastTurnAt?: string;
 	design: string;
@@ -58,23 +66,35 @@ export function loadCockpitSnapshot(cwd: string, now = Date.now()): BoardSnapsho
 	try {
 		const store = new LaunchStore(cwd);
 		const task = store.latest();
-		if (!task) return { active: false, statement: "No active task — close the board and start one in an Owner session", requirements: [], phase: "IDLE", gates: { design: [], implementation: [] }, blockers: [], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: true, errors };
+		if (!task) return { active: false, statement: "No active task — close the board and start one in an Owner session", requirements: [], phase: "IDLE", gates: { design: [], implementation: [] }, blockers: [], children: [], runs: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: true, errors };
 		const status = store.readStatus();
 		const activity = store.readActivity();
 		const spendEntries = store.loadSpend();
 		const totals = totalSpend(spendEntries);
 		const heartbeat = status?.heartbeatAt;
 		const connected = task.status !== "active" || Boolean(heartbeat && now - Date.parse(heartbeat) <= STATUS_STALE_MS);
-		const rows = (gate?: StatusGate): BoardVerifier[] => gate?.verifiers.map((verifier) => ({ name: verifier.name, state: stateName(verifier.state), comments: verifier.comments ?? [] })) ?? [];
+		// Latest verdict time per verifier: the ledger is chronological, so last write wins.
+		const lastVerdictAt = new Map<string, string>();
+		for (const verdict of store.loadVerdicts()) {
+			if (verdict.at) lastVerdictAt.set(verdict.verifier, verdict.at);
+		}
+		const rows = (gate?: StatusGate): BoardVerifier[] => gate?.verifiers.map((verifier) => ({ name: verifier.name, state: stateName(verifier.state), comments: verifier.comments ?? [], lastRunAt: lastVerdictAt.get(verifier.name) })) ?? [];
+		const gates = { design: rows(status?.design), implementation: rows(status?.implementation) };
+		const staleVerifiers = new Set([...gates.design, ...gates.implementation].filter((row) => row.state === "stale").map((row) => row.name));
+		const blocker = (text: string): BoardBlocker => {
+			const name = text.includes(":") ? text.slice(0, text.indexOf(":")).trim() : undefined;
+			return { text, at: name ? lastVerdictAt.get(name) : undefined, stale: name ? staleVerifiers.has(name) : false };
+		};
 		return {
 			taskId: task.id,
 			active: task.status === "active",
 			statement: task.statement,
-			requirements: task.requirements.map((requirement) => requirement.text),
+			requirements: task.requirements.map((requirement) => ({ text: requirement.text, addedAt: requirement.addedAt })),
 			phase: task.status === "done" ? "DONE" : task.status === "killed" ? "KILLED" : status?.phase ?? "UNKNOWN",
-			gates: { design: rows(status?.design), implementation: rows(status?.implementation) },
-			blockers: status?.blockers ?? (task.status === "active" ? ["Gate status unavailable until the Owner reconnects"] : []),
+			gates,
+			blockers: (status?.blockers ?? (task.status === "active" ? ["Gate status unavailable until the Owner reconnects"] : [])).map(blocker),
 			children: activity?.children.map((child) => ({ name: child.name, status: child.detail ?? child.status, since: child.startedAt })) ?? [],
+			runs: spendEntries.filter((entry) => entry.kind !== "owner").slice(-100).reverse().map((entry) => ({ at: entry.at, kind: entry.kind, name: entry.name, status: entry.status, costUsd: entry.costUsd })),
 			spend: { cost: totals.costUsd, tokens: totals.tokens.total, entries: totals.runs },
 			lastTurnAt: spendEntries.at(-1)?.at,
 			design: store.readDesign() ?? "",
@@ -84,7 +104,7 @@ export function loadCockpitSnapshot(cwd: string, now = Date.now()): BoardSnapsho
 		};
 	} catch (error) {
 		errors.push((error as Error).message);
-		return { active: false, statement: "Task state unavailable", requirements: [], phase: "UNKNOWN", gates: { design: [], implementation: [] }, blockers: ["Canonical task status is unavailable"], children: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: false, errors };
+		return { active: false, statement: "Task state unavailable", requirements: [], phase: "UNKNOWN", gates: { design: [], implementation: [] }, blockers: [{ text: "Canonical task status is unavailable" }], children: [], runs: [], spend: { cost: 0, tokens: 0, entries: 0 }, design: "", connected: false, errors };
 	}
 }
 
@@ -243,12 +263,12 @@ export function buildBoardNodes(snapshot: BoardSnapshot, frame = 0): BoardNode[]
 			id: "task",
 			summary: [span("Task", undefined, true), span(` · ${count} ${noun}`, "muted")],
 			collapsedSummary: [span("Task", undefined, true), span(` · ${count} ${noun} · ${clean(snapshot.statement)}`, "muted")],
-			details: [
-				{ text: snapshot.statement, prefix: "" },
-				...(count
-					? snapshot.requirements.map((requirement, index) => ({ text: requirement, prefix: ` ${index + 1}. `, prefixColor: "muted" as PaletteColor }))
-					: [{ text: "(none recorded)", prefix: " ", color: "muted" as PaletteColor }]),
-			],
+			details: count ? [{ text: snapshot.statement, prefix: "" }] : [{ text: snapshot.statement, prefix: "" }, { text: "(none recorded)", prefix: " ", color: "muted" as PaletteColor }],
+			children: snapshot.requirements.map((requirement, index) => ({
+				id: `req:${index}`,
+				summary: [span(` ${index + 1}. `, "muted"), span(clean(requirement.text)), ...(requirement.addedAt ? [span(` · ${clock(requirement.addedAt)}`, "muted")] : [])],
+				details: [{ text: requirement.text, prefix: "" }],
+			})),
 		});
 		const gate = (label: string, key: string, rows: BoardVerifier[]): BoardNode => {
 			const go = rows.filter((row) => row.state === "GO").length;
@@ -263,7 +283,10 @@ export function buildBoardNodes(snapshot: BoardSnapshot, frame = 0): BoardNode[]
 				children: rows.map((row) => {
 					const style = STATE_STYLE[row.state];
 					const icon = row.state === "reviewing" ? SPINNER[frame % SPINNER.length] : style.icon;
-					const name: Span[] = [span(icon, style.color, true), span(" "), span(row.name, row.state === "NO-GO" ? "error" : undefined)];
+					const name: Span[] = [
+						span(icon, style.color, true), span(" "), span(row.name, row.state === "NO-GO" ? "error" : undefined),
+						...(row.lastRunAt ? [span(` · ${clock(row.lastRunAt)}`, "muted")] : []),
+					];
 					return {
 						id: `verifier:${key}:${row.name}`,
 						summary: name,
@@ -277,17 +300,23 @@ export function buildBoardNodes(snapshot: BoardSnapshot, frame = 0): BoardNode[]
 		};
 		nodes.push(gate("Design gate", "design", snapshot.gates.design));
 		nodes.push(gate("Implementation gate", "implementation", snapshot.gates.implementation));
-		if (snapshot.blockers.length) nodes.push({
-			id: "blockers",
-			summary: [span("Blockers", "error", true), span(` · ${snapshot.blockers.length}`, "muted")],
-			children: snapshot.blockers.map((blocker, index) => ({
-				id: `blocker:${index}:${blocker.slice(0, 32)}`,
-				summary: [span("✗ ", "error", true), span(clean(blocker))],
-				details: [{ text: blocker, prefix: "" }],
-			})),
-			// Blockers duplicate the gate comments; the count is the signal, drill in for text.
-			defaultExpanded: false,
-		});
+		if (snapshot.blockers.length) {
+			const staleCount = snapshot.blockers.filter((blocker) => blocker.stale).length;
+			nodes.push({
+				id: "blockers",
+				summary: [span("Blockers", "error", true), span(` · ${snapshot.blockers.length}${staleCount ? ` (${staleCount} from a stale round)` : ""}`, "muted")],
+				children: snapshot.blockers.map((blocker, index) => ({
+					id: `blocker:${index}:${blocker.text.slice(0, 32)}`,
+					summary: [
+						span(blocker.stale ? "⚠ " : "✗ ", blocker.stale ? "warning" : "error", true), span(clean(blocker.text)),
+						...(blocker.at ? [span(` · ${clock(blocker.at)}`, "muted")] : []),
+					],
+					details: [{ text: blocker.text, prefix: "" }],
+				})),
+				// Blockers duplicate the gate comments; the count is the signal, drill in for text.
+				defaultExpanded: false,
+			});
+		}
 		const running = snapshot.children.length;
 		const pulse = snapshot.spend.entries
 			? `Owner — ${snapshot.spend.entries} runs · last finished ${clock(snapshot.lastTurnAt)}`
@@ -319,6 +348,37 @@ export function buildBoardNodes(snapshot: BoardSnapshot, frame = 0): BoardNode[]
 		defaultExpanded: true,
 	});
 	return nodes;
+}
+
+const RUN_STYLE: Record<string, { icon: string; color: PaletteColor }> = {
+	ok: { icon: "✓", color: "success" },
+	failed: { icon: "✗", color: "error" },
+	aborted: { icon: "⚠", color: "warning" },
+};
+
+/** The Runs tab: recent worker and verifier runs from the spend ledger, newest first. */
+export function buildRunNodes(snapshot: BoardSnapshot): BoardNode[] {
+	if (!snapshot.runs.length) return [{ id: "runs", summary: [span("Runs", undefined, true), span(" · no worker or verifier runs recorded yet", "muted")] }];
+	const workers = snapshot.runs.filter((run) => run.kind === "worker").length;
+	return [{
+		id: "runs",
+		summary: [span("Runs", undefined, true), span(` · last ${snapshot.runs.length} (${workers} workers) · newest first`, "muted")],
+		children: snapshot.runs.map((run, index) => {
+			const style = RUN_STYLE[run.status] ?? { icon: "○", color: "muted" as PaletteColor };
+			return {
+				id: `run:${index}:${run.at}:${run.name}`,
+				summary: [
+					span(style.icon, style.color, true),
+					span(` ${clock(run.at)} `, "muted"),
+					span(run.kind.padEnd(9), run.kind === "worker" ? "accent" : "muted"),
+					span(run.name),
+					span(` · $${run.costUsd.toFixed(2)}`, "muted"),
+					...(run.status !== "ok" ? [span(` · ${run.status}`, style.color)] : []),
+				],
+			};
+		}),
+		defaultExpanded: true,
+	}];
 }
 
 export interface BoardRow { spans: Span[]; nodeId?: string }
@@ -375,6 +435,15 @@ export class BoardView {
 	private focusIndex = 0;
 	private scroll = 0;
 	private pageRows = 8;
+	private tab: "board" | "runs" = "board";
+
+	get activeTab(): "board" | "runs" { return this.tab; }
+	switchTab(): void {
+		this.tab = this.tab === "board" ? "runs" : "board";
+		this.focusId = undefined;
+		this.focusIndex = 0;
+		this.scroll = 0;
+	}
 
 	private isExpanded = (node: BoardNode): boolean => this.overrides.get(node.id) ?? node.defaultExpanded ?? false;
 
@@ -388,7 +457,7 @@ export class BoardView {
 
 	/** Flatten the current snapshot and re-anchor focus (by id, else by position). */
 	private rowsFor(snapshot: BoardSnapshot, width: number, frame: number): BoardRow[] {
-		const nodes = buildBoardNodes(snapshot, frame);
+		const nodes = this.tab === "runs" ? buildRunNodes(snapshot) : buildBoardNodes(snapshot, frame);
 		this.nodesById.clear();
 		this.parentById.clear();
 		this.index(nodes);
@@ -434,9 +503,10 @@ export class BoardView {
 		const header = renderHeader(snapshot, width, palette, frame);
 		const rows = this.rowsFor(snapshot, width, frame);
 		const key = (label: string, action: string): Span[] => [span(label, "accent", true), span(` ${action}`, "muted")];
+		const tabHint = key("⇥", this.tab === "board" ? "runs" : "board");
 		const hintRows = packSpanCells(snapshot.active
-			? [key("↑↓", "move"), key("⏎", "open"), key("←→", "fold"), key("⇞⇟", "page"), key("a", "append"), key("k", "kill"), key("q", "close")]
-			: [key("↑↓", "move"), key("⏎", "open"), key("q", "close")], width);
+			? [key("↑↓", "move"), key("⏎", "open"), key("←→", "fold"), tabHint, key("⇞⇟", "page"), key("a", "append"), key("k", "kill"), key("q", "close")]
+			: [key("↑↓", "move"), key("⏎", "open"), tabHint, key("q", "close")], width);
 		let feedbackRows = feedback ? wrap(feedback, Math.max(1, width - 2), "▸ ").map((line) => [span(line, "accent")]) : [];
 		const fixed = header.length + hintRows.length + 1;
 		feedbackRows = feedbackRows.slice(0, Math.max(0, height - fixed - 1));
@@ -723,6 +793,7 @@ export default function cockpit(pi: ExtensionAPI): void {
 					if (is("enter") || is("space")) { view.toggle(); rerender(); return; }
 					if (is("right") || is("l")) { view.expand(); rerender(); return; }
 					if (is("left") || is("h")) { view.collapse(); rerender(); return; }
+					if (is("tab")) { view.switchTab(); rerender(); return; }
 					if (is("pageDown")) { view.movePage(1); rerender(); return; }
 					if (is("pageUp")) { view.movePage(-1); rerender(); return; }
 					if (is("g") || is("home")) { view.first(); rerender(); return; }

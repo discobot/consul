@@ -69,10 +69,12 @@ test("snapshot projects status, activity, verdict history, design, and spend", (
 	assert.equal(snapshot.taskId, "abc123");
 	assert.equal(snapshot.phase, "IMPLEMENTING");
 	assert.equal(snapshot.connected, true);
-	assert.deepEqual(snapshot.requirements, ["Show both gates", "Never mutate task files"]);
+	assert.deepEqual(snapshot.requirements.map((requirement) => requirement.text), ["Show both gates", "Never mutate task files"]);
+	assert.equal(snapshot.requirements[0].addedAt, "now");
 	assert.deepEqual(snapshot.gates.design.map((row) => [row.name, row.state]), [["clean-code", "GO"]]);
 	assert.deepEqual(snapshot.gates.implementation[0].comments, ["Fix RPC framing"]);
 	assert.deepEqual(snapshot.children, [{ name: "worker:rpc", status: "running", since: "now" }]);
+	assert.deepEqual(snapshot.runs.map((run) => [run.kind, run.name, run.status]), [["verifier", "v", "ok"], ["worker", "w", "ok"]], "recent runs surface newest first");
 	assert.deepEqual(snapshot.spend, { cost: 0.3, tokens: 1500, entries: 2 });
 	assert.equal(snapshot.lastTurnAt, "now", "the last spend entry timestamps the owner pulse");
 	assert.equal(snapshot.design, "# Cockpit\n");
@@ -112,7 +114,7 @@ test("render is a bounded, complete task board with visible controls", () => {
 	assert.equal(lines.filter((line) => line.includes("1. ")).length, 1, "wrapped requirements are numbered once");
 
 	const view = new BoardView();
-	const page = view.renderPage({ ...loadCockpitSnapshot(cwd), requirements: Array.from({ length: 30 }, (_, i) => `requirement ${i}`) }, 40, 12, "Requirement accepted by Owner");
+	const page = view.renderPage({ ...loadCockpitSnapshot(cwd), requirements: Array.from({ length: 30 }, (_, i) => ({ text: `requirement ${i}` })) }, 40, 12, "Requirement accepted by Owner");
 	assert.equal(page.length, 12);
 	const footer = page.slice(-6).join(" ");
 	assert.match(footer, /Requirement accepted by Owner/, "feedback stays fixed");
@@ -186,6 +188,38 @@ test("board is keyboard-navigable: focus order, folding, and previews", () => {
 	fs.rmSync(cwd, { recursive: true, force: true });
 });
 
+test("runs tab lists recent runs; verifiers, requirements, and blockers carry times", () => {
+	const { cwd, dir } = fixture();
+	const now = Date.now();
+	writeStatus(dir, now, { blockers: ["interfaces: Fix RPC framing before the supervisor restarts the owner process"] });
+	fs.writeFileSync(path.join(dir, "verdicts.jsonl"), `${JSON.stringify({ gate: "implementation", verifier: "interfaces", verdict: "no-go", comments: ["x"], hash: "i", at: "2026-08-01T07:44:10.000Z" })}\n`);
+	fs.writeFileSync(path.join(dir, "spend.jsonl"), [
+		JSON.stringify({ at: "2026-08-01T06:00:00.000Z", kind: "worker", name: "engine-app", model: "p/m", tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, costUsd: 0.42, status: "ok" }),
+		JSON.stringify({ at: "2026-08-01T07:44:10.000Z", kind: "verifier", name: "interfaces", model: "p/m", tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, costUsd: 0.05, status: "failed" }),
+		"",
+	].join("\n"));
+	const snapshot = () => loadCockpitSnapshot(cwd, now);
+
+	const full = renderCockpit(snapshot(), 100).join("\n");
+	assert.match(full, /interfaces · 07:44:10/, "verifier rows show their last verdict time");
+	assert.match(full, /1\. Show both gates · now/, "requirements show when they were added");
+	assert.match(full, /owner process · 07:44:10/, "blockers show the time of the verdict that raised them");
+
+	const view = new BoardView();
+	view.renderPage(snapshot(), 80, 30);
+	view.switchTab();
+	assert.equal(view.activeTab, "runs");
+	const runs = view.renderPage(snapshot(), 80, 30).join("\n");
+	assert.match(runs, /Runs · last 2 \(1 workers\)/);
+	assert.match(runs, /worker\s+engine-app · \$0\.42/);
+	assert.match(runs, /verifier\s+interfaces · \$0\.05 · failed/);
+	assert.match(runs, /⇥ board/, "the tab hint flips");
+	assert.ok(runs.indexOf("07:44:10") < runs.indexOf("06:00:00"), "newest run listed first");
+	view.switchTab();
+	assert.match(view.renderPage(snapshot(), 80, 30).join("\n"), /Design gate/, "tab toggles back to the board");
+	fs.rmSync(cwd, { recursive: true, force: true });
+});
+
 test("palette paints states, chrome, and feedback; the spinner advances with the frame", () => {
 	const { cwd, dir } = fixture();
 	const now = Date.now();
@@ -211,7 +245,7 @@ test("missing status never promotes historical verdicts to fresh gate state", ()
 	const snapshot = loadCockpitSnapshot(cwd);
 	assert.deepEqual(snapshot.gates.design, []);
 	assert.equal(snapshot.phase, "UNKNOWN");
-	assert.match(snapshot.blockers.join(" "), /status unavailable/i);
+	assert.match(snapshot.blockers.map((blocker) => blocker.text).join(" "), /status unavailable/i);
 	fs.rmSync(cwd, { recursive: true, force: true });
 });
 

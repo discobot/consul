@@ -48,7 +48,11 @@ Then, in a git repository with at least one commit:
   `✓ HOLDS` row, blockers fold to their count) so hard tasks stay on one screen; NO-GO
   verifiers preview their first comment and expand to the full text, and the activity
   section always shows the Owner's pulse (run count, last finished turn) beside any
-  running children. Content is capped at a readable 120 columns on ultra-wide terminals. Move with ↑/↓ (or j/u), toggle with Enter/Space,
+  running children. Verifier rows, requirements, and blockers carry timestamps (blockers
+  show the time of the verdict that raised them, and are marked when that verdict is
+  stale). Tab switches to a Runs view: the recent worker and verifier runs from the spend
+  ledger — status, time, and cost, newest first. Content is capped at a readable 120
+  columns on ultra-wide terminals. Move with ↑/↓ (or j/u), toggle with Enter/Space,
   fold with ←/→ (← climbs to the parent), page with PgUp/PgDn, jump with g/G, `a` to
   append, `k` to kill with confirmation, and q/Esc to close. State is plain files under
   `.pi/council/tasks/<id>/`, including verdict, activity, status, and spend projections.
