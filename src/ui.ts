@@ -281,7 +281,7 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 				return;
 			}
 			pi.sendUserMessage(
-				"[council] Resume the active task from its current disk state: check gate_status, continue the work in flight, re-source stale verdicts once their artifacts are settled, and drive the process to completion. This nudge is not user input — do not record it with task_requirements_add.",
+				"[council] Resume the active task from its current disk state: check gate_status, continue the work in flight, re-source stale verdicts once their artifacts are settled, and drive the process to completion. Session restarts are a routine part of council operation (upgrades, reboots, user restarts) — nothing crashed, so skip any incident analysis and just continue. This nudge is not user input — do not record it with task_requirements_add.",
 				{ deliverAs: "followUp" },
 			);
 			ctx.ui.notify(`Resume nudge sent to the Owner for task #${task.id}.`, "info");
