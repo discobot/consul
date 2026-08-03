@@ -72,8 +72,10 @@ The nine built-ins are `clean-code`, `interfaces`, `user-local-pov`, `user-globa
 `github-clarity` (implementation gate only). `design` reviews intended design and
 information design at both gates, including implementation adherence; `visual-design`
 separately reviews the perceptual quality and consistency of the rendered implementation.
-Each query runs the verifier afresh with its system prompt, repo/task context, and a bounded
-history of its own prior verdicts (never other agents' negotiation). Shipped definitions live in
+Each query runs the verifier afresh and stateless: its system prompt and repo/task context
+only — no memory of its own prior verdicts and no other agents' negotiation, so every round
+is fresh eyes. Verifiers review adversarially: the shared doctrine assumes AI-authored work
+is polished in detail and suspect as a whole. Shipped definitions live in
 [`prompts/agents/verifiers/`](prompts/agents/verifiers/); a project can
 override or extend them in `.pi/council/verifiers/*.md` (matched by `name`). Perception
 verifiers may set `browser: true` to use available Playwright/Chromium rendering via `bash`;

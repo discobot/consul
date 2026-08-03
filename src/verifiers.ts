@@ -35,7 +35,6 @@ function promptSection(prompt: string, heading: string): string {
 }
 
 const VERDICT_PROTOCOL = loadAgentPrompt("verdict-protocol.md");
-const REVIEW_HISTORY_PROTOCOL = promptSection(VERDICT_PROTOCOL, "Review history protocol");
 const VERDICT_RESPONSE_PROTOCOL = promptSection(VERDICT_PROTOCOL, "Verdict response protocol");
 const BROWSER_GUIDANCE = loadAgentPrompt("browser-guidance.md");
 
@@ -198,22 +197,9 @@ export async function buildVerifierPrompt(
 		"",
 		await buildTaskContext(store, task),
 	];
-	const history = store
-		.loadVerdicts()
-		.filter((v) => v.gate === gate && v.verifier === verifierName)
-		.slice(-2);
-	if (history.length > 0) {
-		sections.push(
-			"",
-			"## Your review history on this gate",
-			...history.map(
-				(v) =>
-					`- ${v.at} @ hash ${v.hash}: ${v.verdict.toUpperCase()}${v.comments.length > 0 ? ` — ${v.comments.join(" • ").slice(0, 600)}` : ""}`,
-			),
-			`The full committee record is in .pi/council/tasks/${task.id}/verdicts.jsonl.`,
-			REVIEW_HISTORY_PROTOCOL,
-		);
-	}
+	// Verifiers are deliberately stateless: no memory of their own prior verdicts and no
+	// pointer to the committee record. A judge that remembers its last review anchors on
+	// it — fresh eyes every round is the point of the panel.
 	if (browser) {
 		sections.push("", BROWSER_GUIDANCE);
 	}

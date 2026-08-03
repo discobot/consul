@@ -17,9 +17,14 @@ verdicts.
    workers for any work, sources verdicts, and reconciles every change. If the user appends
    a requirement, it is the Owner's job to propagate it — into requirements, into the
    design, into the implementation, and into re-sourced reviews.
-4. **Verifiers are transient and fresh.** Every query starts a verifier afresh with its own
-   system prompt, repo status, task/gate artifact, and only a bounded history of that same
-   verifier's prior verdicts to prevent relitigation. It receives no other agent history.
+4. **Verifiers are transient, fresh, and stateless.** Every query starts a verifier afresh
+   with its own system prompt, repo status, and task/gate artifact — and nothing else: no
+   history of its own prior verdicts, no other agent's negotiation, no committee record.
+   A judge that remembers its last review anchors on it; a judge that can be reasoned
+   with across rounds can be worn down. Fresh eyes every round is the design. The shared
+   doctrine (prompts/agents/verdict-protocol.md) sets the posture: AI-authored work is
+   reviewed adversarially — polished details, presumed-senseless whole, "what am I
+   actually looking at?" before any detail work.
 5. **Approvals are pinned to content, not to time.** A verdict records a hash of exactly
    what was reviewed. If the relevant content changes — including via an appended
    requirement — the approval is *stale* and the gate closes again. Re-sourcing is the

@@ -129,26 +129,15 @@ test("verifier definitions are read-only, validated, and fingerprinted", () => {
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("verifier history is bounded to the same verifier and definition", async () => {
-	const verdict = (verifier: string, fingerprint: string, at: string) => ({
-		gate: "design" as const,
-		verifier,
-		fingerprint,
-		verdict: "go" as const,
-		comments: [at],
-		hash: at,
-		at,
+test("verifier prompts are stateless: no prior verdicts, no committee record", async () => {
+	const verdict = (verifier: string, at: string) => ({
+		gate: "design" as const, verifier, fingerprint: "current",
+		verdict: "go" as const, comments: [at], hash: at, at,
 	});
 	const store = {
 		readDesign: () => "# Design",
 		repoStatus: async () => "clean",
-		loadVerdicts: () => [
-			verdict("mine", "current", "old"),
-			verdict("other", "current", "other"),
-			verdict("mine", "current", "newer"),
-			verdict("mine", "legacy", "legacy"),
-			verdict("mine", "current", "newest"),
-		],
+		loadVerdicts: () => [verdict("mine", "old"), verdict("mine", "newest"), verdict("other", "other")],
 	};
 	const task = {
 		id: "abcd",
@@ -160,13 +149,12 @@ test("verifier history is bounded to the same verifier and definition", async ()
 		status: "active" as const,
 	};
 	const prompt = await buildVerifierPrompt(store as never, task, "design", "mine", "current", true);
-	assert.ok(!prompt.includes("old @ hash old"));
-	assert.ok(!prompt.includes("other @ hash other"));
-	assert.ok(!prompt.includes("newer @ hash newer"), "history is bounded");
-	assert.ok(prompt.includes("legacy @ hash legacy"), "definition changes stale approval but retain review history");
-	assert.ok(prompt.includes("newest @ hash newest"));
+	assert.ok(!prompt.includes("review history"), "no history section");
+	assert.ok(!prompt.includes("old @ hash"), "no own prior verdicts");
+	assert.ok(!prompt.includes("verdicts.jsonl"), "no pointer to the committee record");
 	assert.ok(prompt.includes("Playwright/Chromium"));
 	assert.ok(prompt.includes("degrade gracefully"));
+	assert.ok(prompt.includes("Real pace, real audio") || prompt.includes("real pace"), "real-pace guidance rides along for browser verifiers");
 });
 
 test("watchdog detects inactivity and sleep-sized clock jumps", async () => {
