@@ -97,7 +97,18 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 			return;
 		}
 		const { design, impl } = await gateReports(ctx.cwd);
-		const running = new Set(liveChildren.keys());
+		// Merge externally projected reviewers (a headless judges pass writes status too);
+		// without this, two 5s writers stomp each other and the board flickers.
+		const externalReviewing = new Set<string>();
+		try {
+			const existing = store.readStatus();
+			if (existing?.heartbeatAt && Date.now() - Date.parse(existing.heartbeatAt) < 15_000) {
+				for (const [gateName, gateStatus] of [["design", existing.design], ["implementation", existing.implementation]] as const) {
+					for (const v of gateStatus?.verifiers ?? []) if (v.state === "reviewing") externalReviewing.add(`${gateName}:${v.name}`);
+				}
+			}
+		} catch { /* projection merge is best-effort */ }
+		const running = new Set([...liveChildren.keys(), ...externalReviewing]);
 		const liveGate: Gate | undefined = [...running].some((key) => key.startsWith("design:"))
 			? "design"
 			: [...running].some((key) => key.startsWith("implementation:"))
