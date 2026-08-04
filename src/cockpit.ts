@@ -594,6 +594,7 @@ export class OwnerSupervisor {
 	private ready = false;
 	/** lastTurnAt value at the previous revive; re-arm only after a newer turn lands. */
 	private lastRevive?: string;
+	private lastReviveAt?: number;
 	private sequence = 0;
 	private pending = new Map<string, (ok: boolean, error?: string) => void>();
 	private queuedAppends: { text: string; resolve: (message: string) => void }[] = [];
@@ -734,11 +735,21 @@ export class OwnerSupervisor {
 		let snapshot: BoardSnapshot;
 		try { snapshot = loadCockpitSnapshot(this.cwd); } catch { return; }
 		if (!snapshot.active) return;
+		// A cold start — fresh empty session over an active task — is nudged immediately:
+		// the 10-minute age threshold exists to detect stalls in a live session, and a
+		// just-restarted Owner should never serve a coma waiting it out.
+		const coldStart = (() => {
+			try { return fs.readdirSync(path.join(this.cwd, ".pi", "council", "owner-sessions")).filter((f) => f.endsWith(".jsonl")).length === 0; } catch { return true; }
+		})();
 		const marker = snapshot.lastTurnAt ?? "(no runs)";
-		if (this.lastRevive === marker) return;
+		const sinceRevive = this.lastReviveAt ? Date.now() - this.lastReviveAt : Number.POSITIVE_INFINITY;
+		// Re-arm on the same marker after another full interval: a dropped nudge must not
+		// idle the task forever.
+		if (this.lastRevive === marker && sinceRevive < REVIVE_AFTER_MS) return;
 		const age = snapshot.lastTurnAt ? Date.now() - Date.parse(snapshot.lastTurnAt) : Number.POSITIVE_INFINITY;
-		if (!Number.isNaN(age) && age < REVIVE_AFTER_MS) return;
+		if (!coldStart && !Number.isNaN(age) && age < REVIVE_AFTER_MS) return;
 		this.lastRevive = marker;
+		this.lastReviveAt = Date.now();
 		void this.send("prompt", { message: "/task-resume", streamingBehavior: "followUp" })
 			.then((ok) => this.changed(ok ? "Owner looked stalled — sent /task-resume" : "Owner stalled; /task-resume delivery failed"));
 	}
