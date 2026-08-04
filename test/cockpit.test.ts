@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import {
 	BoardView,
+	acquireBoardLock,
 	JsonlDecoder,
 	OwnerSupervisor,
 	type Palette,
@@ -305,6 +306,20 @@ test("board supervisor revives a stalled Owner once via /task-resume", async () 
 		if (previous === undefined) delete process.env.COUNCIL_PI; else process.env.COUNCIL_PI = previous;
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
+});
+
+test("board lock: second board is refused while the first lives, stale locks are reclaimed", () => {
+	const { cwd } = fixture();
+	const release = acquireBoardLock(cwd, process.pid);
+	assert.ok(release, "first board takes the lock");
+	assert.equal(acquireBoardLock(cwd, process.pid + 1), null, "second board refused while holder lives");
+	release();
+	const again = acquireBoardLock(cwd, process.pid);
+	assert.ok(again, "released lock is reacquirable");
+	again();
+	fs.writeFileSync(path.join(cwd, ".pi", "council", "board.lock"), "999999");
+	assert.ok(acquireBoardLock(cwd, process.pid), "stale dead-pid lock is reclaimed");
+	fs.rmSync(cwd, { recursive: true, force: true });
 });
 
 test("restart backoff is bounded/resettable and sleep jumps are explicit", () => {

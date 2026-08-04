@@ -764,6 +764,23 @@ export class OwnerSupervisor {
 	}
 }
 
+/** One supervised Owner per task dir: a second board must not race the first.
+ * Returns a release fn when the lock is ours, or null when a live board holds it. */
+export function acquireBoardLock(cwd: string, pid = process.pid): (() => void) | null {
+	const lockPath = path.join(cwd, ".pi", "council", "board.lock");
+	try {
+		const holder = Number(fs.readFileSync(lockPath, "utf8").trim());
+		if (Number.isFinite(holder) && holder > 0) {
+			try { process.kill(holder, 0); return null; } catch { /* stale */ }
+		}
+	} catch { /* absent */ }
+	try {
+		fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+		fs.writeFileSync(lockPath, String(pid));
+	} catch { return null; }
+	return () => { try { if (Number(fs.readFileSync(lockPath, "utf8").trim()) === pid) fs.rmSync(lockPath); } catch { /* gone */ } };
+}
+
 function watchState(cwd: string, changed: () => void): () => void {
 	const root = path.join(cwd, ".pi", "council");
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -794,13 +811,14 @@ export default function cockpit(pi: ExtensionAPI): void {
 		// kitty) works; imported dynamically so bare-node unit tests can import this module.
 		const { matchesKey, isKeyRelease } = await import("@earendil-works/pi-tui");
 		let snapshot = loadCockpitSnapshot(ctx.cwd);
-		let feedback = "Owner starting…";
 		let tuiRender = () => {};
 		const extensionPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "index.ts");
-		const supervisor = new OwnerSupervisor(ctx.cwd, extensionPath, (message) => { feedback = message; snapshot = loadCockpitSnapshot(ctx.cwd); tuiRender(); });
-		supervisor.start();
+		const lock = acquireBoardLock(ctx.cwd);
+		let feedback = lock ? "Owner starting…" : "View-only: another board already supervises this task";
+		const supervisor = lock ? new OwnerSupervisor(ctx.cwd, extensionPath, (message) => { feedback = message; snapshot = loadCockpitSnapshot(ctx.cwd); tuiRender(); }) : null;
+		supervisor?.start();
 		const stopWatch = watchState(ctx.cwd, () => { snapshot = loadCockpitSnapshot(ctx.cwd); tuiRender(); });
-		cleanup = () => { stopWatch(); supervisor.stop(); };
+		cleanup = () => { stopWatch(); supervisor?.stop(); lock?.(); };
 		ctx.ui.setTitle("council cockpit");
 		void ctx.ui.custom<void>((tui, theme, _keys, done) => {
 			const view = new BoardView();
@@ -832,10 +850,10 @@ export default function cockpit(pi: ExtensionAPI): void {
 						if (!text?.trim()) return;
 						feedback = "Requirement sending…";
 						tui.requestRender();
-						supervisor.append(text.trim()).then((message) => { feedback = message; tui.requestRender(); });
+						supervisor?.append(text.trim()).then((message) => { feedback = message; tui.requestRender(); });
 					});
 					if (snapshot.active && (is("k") || is("shift+k"))) void ctx.ui.confirm("Kill task?", "This permanently ends the task but keeps all records.").then((confirmed) => {
-						if (confirmed) supervisor.killTask().then((message) => { feedback = message; tui.requestRender(); });
+						if (confirmed) supervisor?.killTask().then((message) => { feedback = message; tui.requestRender(); });
 					});
 				},
 			};
