@@ -15,6 +15,8 @@ import { buildVerifierPrompt, discoverVerifiers, parseVerdict, verifiersForGate 
 export interface ResetOptions {
 	/** Run the headless judges pass after reseeding (needs models + pi). Default true. */
 	judges?: boolean;
+	/** Repo-relative file to adopt as the design (overrides task/config sources). */
+	adopt?: string;
 	log?: (line: string) => void;
 }
 
@@ -35,7 +37,15 @@ export async function resetTask(cwd: string, options: ResetOptions = {}): Promis
 	if (!task) throw new Error("No task to reset — nothing under .pi/council/tasks.");
 	const statement = task.statement;
 	const requirements = task.requirements.map((r) => r.text);
-	const design = before.readDesign();
+	// Design to carry: explicit --adopt, else the previous task's design, else the
+	// project's configured design mirror (e.g. docs/DESIGN.md) if it exists.
+	const mirror = before.loadConfig().designMirror;
+	const readRepoFile = (rel: string | undefined) => {
+		if (!rel) return null;
+		try { return fs.readFileSync(path.join(before.cwd, rel), "utf8"); } catch { return null; }
+	};
+	const design = readRepoFile(options.adopt) ?? before.readDesign() ?? readRepoFile(mirror);
+	if (options.adopt && !readRepoFile(options.adopt)) throw new Error(`--adopt: cannot read ${options.adopt}`);
 
 	const councilDir = path.join(before.cwd, ".pi", "council");
 	// A live board may stay open: it reads disk and will simply show the judges pass as

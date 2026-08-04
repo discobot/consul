@@ -222,6 +222,8 @@ export interface LaunchConfig {
 	verifierModel?: string;
 	workerModel?: string;
 	clerkModel?: string;
+	/** Repo-relative design file that resets adopt when the task carries none. */
+	designMirror?: string;
 	/** Persistent model overrides keyed by verifier name. */
 	verifierModels?: Record<string, string>;
 	/** Max children running at once. */
