@@ -42,9 +42,10 @@ Then, in a git repository with at least one commit:
 - **`council reset` starts over, judges first.** It wipes the process state (verdicts,
   sessions, ledgers — config stays), reseeds the same statement and requirements as a
   fresh task, carries the previous design forward verbatim, and — before any Owner
-  exists — runs the full design panel plus the Clerk headlessly. Then start
-  `council board`: the Owner wakes into a sourced gate and an open-items ledger.
-  `--no-judges` skips the panel pass.
+  exists — runs the full design panel plus the Clerk headlessly. A board that is already
+  open stays open and shows the judges working live (the pass projects activity and gate
+  state to disk); the supervised Owner stays quiet while judges run and wakes into the
+  finished ledger. `--no-judges` skips the panel pass.
 - **Everything is resumable.** All task state lives on disk and verdicts are pinned to
   content hashes, so quitting and restarting loses nothing — held gates stay held.
   `council -r` (or `--resume`) opens pi's session picker — pick one, press enter, and it
