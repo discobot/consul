@@ -14,6 +14,12 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const boardMode = process.argv[2] === "board";
+if (process.argv[2] === "reset") {
+	// Headless: wipe process state, reseed the same task, carry the design, run the
+	// judges pass + clerk before any Owner exists. Then start `council board`.
+	const reset = spawnSync(process.execPath, [path.join(root, "src", "reset-cli.ts"), ...process.argv.slice(3)], { stdio: "inherit", env: process.env });
+	process.exit(reset.status ?? 1);
+}
 const extensionArgs = boardMode
 	? ["-e", path.join(root, "src", "cockpit.ts")]
 	: ["-e", path.join(root, "index.ts"), "-e", path.join(root, "src", "tui-skin.ts")];

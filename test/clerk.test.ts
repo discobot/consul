@@ -45,3 +45,36 @@ test("applyClerkRound merges sources, pins overrules to this round's hashes, and
 	const round3 = applyClerkRound(round2, { items: round2.items.map((i) => ({ ...i, sources: [] })), verdictOverrules: [{ gate: "design", verifier: "design", reason: "x" }] }, [verdict("design", "go", "t3", "h3")], "t3");
 	assert.equal(round3.overrules.length, 1, "go verdicts are not overruled");
 });
+
+test("resetTask wipes process state, reseeds the task, and carries the design", async () => {
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const { execFileSync } = await import("node:child_process");
+	const { LaunchStore } = await import("../src/state.ts");
+	const { resetTask } = await import("../src/reset.ts");
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "council-reset-"));
+	const git = (...args: string[]) => execFileSync("git", args, { cwd: dir });
+	git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t");
+	fs.writeFileSync(path.join(dir, "a.txt"), "a\n"); git("add", "."); git("commit", "-qm", "init");
+	const store = new LaunchStore(dir);
+	const task = await store.createTask("statement", ["r1", "r2"]);
+	store.writeDesign("# Design v9");
+	store.appendVerdict({ gate: "design", verifier: "x", verdict: "no-go", comments: ["c"], hash: "h", at: "t" });
+	fs.mkdirSync(path.join(dir, ".pi/council/owner-sessions"), { recursive: true });
+	fs.writeFileSync(path.join(dir, ".pi/council/owner-sessions/s.jsonl"), "{}\n");
+
+	const result = await resetTask(dir, { judges: false });
+	assert.equal(result.previousTaskId, task.id);
+	assert.notEqual(result.taskId, task.id);
+	assert.equal(result.requirements, 2);
+	assert.equal(result.designCarried, true);
+	assert.ok(!fs.existsSync(path.join(dir, ".pi/council/owner-sessions")), "sessions wiped");
+	const after = new LaunchStore(dir);
+	const fresh = after.mustCurrent();
+	assert.equal(fresh.statement, "statement");
+	assert.deepEqual(fresh.requirements.map((r) => r.text), ["r1", "r2"]);
+	assert.equal(after.readDesign()?.trim(), "# Design v9", "design carried verbatim");
+	assert.equal(after.loadVerdicts().length, 0, "old verdicts gone");
+	fs.rmSync(dir, { recursive: true, force: true });
+});
