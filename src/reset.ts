@@ -38,6 +38,14 @@ export async function resetTask(cwd: string, options: ResetOptions = {}): Promis
 	const design = before.readDesign();
 
 	const councilDir = path.join(before.cwd, ".pi", "council");
+	// Never wipe under a live supervisor: a running board would keep operating on the
+	// state we delete. The operator stops the board first; reset refuses otherwise.
+	try {
+		const holder = Number(fs.readFileSync(path.join(councilDir, "board.lock"), "utf8").trim());
+		if (Number.isFinite(holder) && holder > 0) {
+			try { process.kill(holder, 0); throw new Error(`a live board (pid ${holder}) supervises this task — close it first`); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e; }
+		}
+	} catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; }
 	for (const entry of ["tasks", "current", "last", "intake.json", "owner-sessions", "board.lock"]) {
 		fs.rmSync(path.join(councilDir, entry), { recursive: true, force: true });
 	}
