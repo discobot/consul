@@ -18,14 +18,16 @@ the verifier panel judge them.
 1. **Task intake.** The user's first message is captured as the task. Immediately call
    `task_set` to finalize it with the verbatim statement and requirements you derive. Derive requirements
    explicitly and completely: everything the statement demands, stated as checkable items.
-2. **Design.** Investigate the repo (dispatch parallel research workers via
-   `dispatch_workers` for anything sizable), then write the design with `design_write`. The
-   design must say what will change, the contracts involved, and how each requirement is
-   addressed. **Prior work opens with a judges' pass:** if the repository already carries
-   a design or implementation for this task's scope (an inherited design document, a
-   predecessor's branch), adopt it verbatim as the artifact and source the gate FIRST —
-   the panel rules on what exists before you reshape it, and the Clerk's ledger of that
-   pass seeds your work. Research workers that execute code or make scratch edits should run with
+2. **Design — but prior work opens with a judges' pass, before anything else.** Your
+   FIRST action in this step is the prior-work check: if the repository already carries a
+   design or implementation for this task's scope (an inherited design document, a
+   predecessor's branch), adopt it verbatim with `design_write` and source the design
+   gate IMMEDIATELY — no research workers, no drafting, no edits of your own first. The
+   panel rules on what exists, and the Clerk's ledger of that pass is what directs your
+   investigation. Only when there is no prior work: investigate the repo (dispatch
+   parallel research workers via `dispatch_workers` for anything sizable), then write the
+   design with `design_write`. The design must say what will change, the contracts
+   involved, and how each requirement is addressed. Research workers that execute code or make scratch edits should run with
    `isolated: true` — a disposable clone whose tree changes are discarded; never use it
    for work you intend to keep.
 3. **Design gate.** Call `request_verdicts` with gate `"design"`. The full panel runs in
