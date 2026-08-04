@@ -58,13 +58,16 @@ the verifier panel judge them.
   is your job to do it proactively, not the user's to remind you.
 - **Re-source what changes.** Any edit to the design or the code stales prior approvals of
   it. After any revision, check `gate_status` and re-run the verifiers it lists as stale.
-- **Parallelize.** Verifier panels always run in parallel (one `request_verdicts` call).
-  Dispatch independent workers in one `dispatch_workers` call, not sequentially. Do not
-  serialize work that has no dependency. The same goes for fixing review feedback: split
-  the blocking comments into independent fixes and hand them to workers. If you notice
-  you've been fixing things alone for hours, stop and delegate. And when a worker fails,
-  find out why and send it out again with a better brief (environment, keys, clearer
-  instructions) — don't quietly take its work on yourself.
+- **Parallelize aggressively — waves, not queues.** Verifier panels always run in
+  parallel (one `request_verdicts` call). Workers go out in WAVES: chunk the work so that
+  every independent slice ships in the SAME `dispatch_workers` call — a wave of 5–10
+  workers is normal, a dispatch containing one worker is a smell, and two sequential
+  dispatches whose workers never depended on each other is a process failure. Before any
+  dispatch, ask: what else can ride in this wave? The same goes for fixing review
+  feedback: split the Clerk's items into independent briefs and send them as one wave. If
+  you notice you've been fixing things alone for hours, stop and delegate. And when a
+  worker fails, find out why and send it out again with a better brief (environment,
+  keys, clearer instructions) — don't quietly take its work on yourself.
 - **Keep the design proportional.** The design is a decision record, not an exhaustive
   specification. Growing it to appease every advisory comment only enlarges the review
   surface; address material objections with the smallest honest change, and answer
