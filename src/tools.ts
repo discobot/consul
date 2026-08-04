@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { CLERK_PROMPT, applyClerkRound, buildClerkPrompt, formatItemsForOwner, parseClerkOutput } from "./clerk.ts";
 import { type ChildSpec, runChild, runPool } from "./spawn.ts";
 import { type Gate, type GateReport, storeFor, type Verdict } from "./state.ts";
 import {
@@ -40,12 +41,12 @@ export interface LiveActivity {
 	clearInitialInput?: (cwd: string) => void;
 }
 
-function resolveModel(ctx: ExtensionContext, kind: "verifier" | "worker", override?: string, verifierName?: string): string {
+function resolveModel(ctx: ExtensionContext, kind: "verifier" | "worker" | "clerk", override?: string, verifierName?: string): string {
 	const config = storeFor(ctx.cwd).loadConfig();
 	const model =
 		override ??
 		(kind === "verifier" && verifierName ? config.verifierModels?.[verifierName] : undefined) ??
-		(kind === "verifier" ? config.verifierModel : config.workerModel) ??
+		(kind === "verifier" ? config.verifierModel : kind === "clerk" ? config.clerkModel : config.workerModel) ??
 		config.model ??
 		(ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined);
 	if (!model) {
@@ -414,19 +415,53 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 				return verdict;
 			});
 
+			// Clerk arbitration: the stateful ledger dedups the panel's findings, rules on
+			// tug-of-wars, and may overrule verdicts — the Owner works from items, not raw
+			// comments. On clerk failure the raw blockers pass through unchanged.
+			let clerkLedger: string | null = null;
+			try {
+				const previous = store.readClerk();
+				const clerkModel = resolveModel(ctx, "clerk");
+				live.children.set("clerk", "arbitrating the round");
+				emit();
+				const clerkResult = await runChild(
+					{ kind: "clerk", name: "clerk", systemPrompt: CLERK_PROMPT, prompt: buildClerkPrompt(await buildTaskContext(store, task), previous, gate, verdicts), tools: ["read", "grep", "find", "ls"], model: clerkModel, cwd: ctx.cwd, timeoutMs, inactivityMs },
+					signal,
+					(p) => { live.children.set("clerk", `${p.lastActivity} (turn ${p.turns + 1})`); emit(); },
+				);
+				store.appendSpend({ at: new Date().toISOString(), kind: "clerk", name: "clerk", model: clerkModel, tokens: clerkResult.tokens, costUsd: clerkResult.costUsd, status: clerkResult.ok ? "ok" : clerkResult.errorMessage === "aborted" ? "aborted" : "failed" });
+				live.children.delete("clerk");
+				emit();
+				if (!clerkResult.ok) throw new Error(clerkResult.errorMessage ?? "clerk run failed");
+				const parsed = parseClerkOutput(clerkResult.output);
+				if (!parsed) throw new Error("clerk reply had no parseable ledger");
+				const next = applyClerkRound(previous, parsed, verdicts, new Date().toISOString());
+				store.writeClerk(next);
+				clerkLedger = formatItemsForOwner(next, gate);
+			} catch (error) {
+				live.children.delete("clerk");
+				emit();
+				clerkLedger = null;
+				live.onChange(ctx);
+				void error;
+			}
 			const report = await store.gateReport(gate, applicable.map((v) => v.name), fingerprints(applicable));
 			live.onChange(ctx);
-			const lines = verdicts.map((v) => formatVerdictLine(v));
+			const lines = clerkLedger === null
+				? verdicts.map((v) => `- ${formatVerdictLine(v)}`)
+				: verdicts.map((v) => `- ${v.verifier}: ${v.verdict.toUpperCase()}`);
 			return {
 				content: [
 					{
 						type: "text",
 						text: [
 							`Sourced ${verdicts.length} verdict(s) for the ${gate} gate (pinned to hash ${hash}):`,
-							...lines.map((l) => `- ${l}`),
+							...lines,
 							"",
 							gateSummary(report),
-							...(report.holds ? [] : ["", "Blockers:", blockersText(report)]),
+							...(clerkLedger !== null
+								? ["", clerkLedger, "", "Work from the Clerk's open items above — they are the complete, deduplicated review."]
+								: report.holds ? [] : ["", "Clerk unavailable this round; raw blockers:", blockersText(report)]),
 						].join("\n"),
 					},
 				],

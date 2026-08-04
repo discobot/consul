@@ -75,7 +75,14 @@ separately reviews the perceptual quality and consistency of the rendered implem
 Each query runs the verifier afresh and stateless: its system prompt and repo/task context
 only — no memory of its own prior verdicts and no other agents' negotiation, so every round
 is fresh eyes. Verifiers review adversarially: the shared doctrine assumes AI-authored work
-is polished in detail and suspect as a whole. Shipped definitions live in
+is polished in detail and suspect as a whole.
+
+The **Clerk** is the stateful counterweight: after every panel round it folds the raw
+verdicts into a persistent, deduplicated ledger of items (`clerk.json`), rules on
+tug-of-wars once and permanently, kills re-litigation, and may overrule a verdict whose
+every blocking comment it has overruled — a gate holds when each verifier's fresh verdict
+is GO or clerk-overruled. The Owner works from the Clerk's open items, never from raw
+comments. Shipped definitions live in
 [`prompts/agents/verifiers/`](prompts/agents/verifiers/); a project can
 override or extend them in `.pi/council/verifiers/*.md` (matched by `name`). Perception
 verifiers may set `browser: true` to use available Playwright/Chromium rendering via `bash`;
@@ -95,6 +102,7 @@ blocks rather than approving from code alone.
 	"verifierModel": "provider/default-verifier-model",
 	"workerModel": "provider/default-worker-model",
 	"verifierModels": { "clean-code": "provider/specialized-model" },
+	"clerkModel": "provider/clerk-model",
 	"concurrency": 9,
 	"timeoutMinutes": 20,
 	"inactivityMinutes": 3

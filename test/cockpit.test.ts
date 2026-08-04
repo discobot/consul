@@ -109,7 +109,7 @@ test("render is a bounded, complete task board with visible controls", () => {
 	assert.match(text, /Design gate/);
 	assert.match(text, /Implementation gate/);
 	assert.match(text, /verdicts pending/);
-	assert.match(text, /Blockers/);
+	assert.match(text, /Items/);
 	assert.match(text, /Spend/);
 	assert.equal(lines.filter((line) => line.includes("1. ")).length, 1, "wrapped requirements are numbered once");
 
@@ -233,7 +233,7 @@ test("palette paints states, chrome, and feedback; the spinner advances with the
 	assert.match(text, /<accent>▾ <\/accent>/, "expandable nodes carry accent fold arrows");
 	assert.match(text, /<dim>─+<\/dim>/, "the header rule stays dim");
 	assert.match(text, /<accent>▸ hello<\/accent>/, "feedback is accented");
-	assert.match(text, /<error><b>Blockers<\/b><\/error>/, "blockers title paints error");
+	assert.match(text, /<error><b>Items<\/b><\/error>/, "items title paints error");
 	const later = new BoardView().renderPage(loadCockpitSnapshot(cwd, now), 90, 34, "", marker, 1).join("\n");
 	assert.match(later, /<accent><b>◈<\/b><\/accent>/, "spinner advances with the frame");
 	fs.rmSync(cwd, { recursive: true, force: true });

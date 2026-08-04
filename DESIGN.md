@@ -17,6 +17,13 @@ verdicts.
    workers for any work, sources verdicts, and reconciles every change. If the user appends
    a requirement, it is the Owner's job to propagate it — into requirements, into the
    design, into the implementation, and into re-sourced reviews.
+3½. **The Clerk is the stateful counterweight.** Stateless adversarial judges re-roll
+   objections and pull axes in opposite directions across rounds; unanimity alone cannot
+   converge. The Clerk carries the full history: it dedups every round's findings into a
+   persistent items ledger, records rulings on contested axes (which bind future rounds),
+   kills re-litigation, and may overrule a verdict outright — the gate then treats that
+   verdict as GO. Overrules are pinned to the verdict's content hash, so any change
+   re-opens honest review. The Owner sees only the Clerk's unified list.
 4. **Verifiers are transient, fresh, and stateless.** Every query starts a verifier afresh
    with its own system prompt, repo status, and task/gate artifact — and nothing else: no
    history of its own prior verdicts, no other agent's negotiation, no committee record.

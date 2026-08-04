@@ -36,6 +36,7 @@ const SHORT_LABELS: Record<string, string> = {
 const STATE_ICONS: Record<string, { icon: string; color: string }> = {
 	go: { icon: "✓", color: "success" },
 	"no-go": { icon: "✗", color: "error" },
+	overruled: { icon: "⊘", color: "muted" },
 	stale: { icon: "⚠", color: "warning" },
 	pending: { icon: "○", color: "muted" },
 };
@@ -118,9 +119,12 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 				...(verifier.verdict?.comments.length ? { comments: verifier.verdict.comments } : {}),
 			})),
 		});
-		const blockers = [...design.verifiers, ...impl.verifiers]
-			.filter((verifier) => verifier.state === "no-go" || verifier.state === "stale")
-			.flatMap((verifier) => verifier.verdict?.comments.map((comment) => `${verifier.name}: ${comment}`) ?? []);
+		const clerk = store.readClerk();
+		const blockers = clerk.items.length > 0
+			? clerk.items.filter((item) => item.status === "open").map((item) => `${item.id}: ${item.title}`)
+			: [...design.verifiers, ...impl.verifiers]
+				.filter((verifier) => verifier.state === "no-go" || verifier.state === "stale")
+				.flatMap((verifier) => verifier.verdict?.comments.map((comment) => `${verifier.name}: ${comment}`) ?? []);
 		store.writeStatus({ taskId: task.id, phase, generatedAt: new Date().toISOString(), heartbeatAt: new Date().toISOString(), pendingInputIds: task.pendingInputs?.map((input) => input.id) ?? [], blockers, spend, design: projectGate(design), implementation: projectGate(impl) });
 		if (!ctx.hasUI) return;
 		const theme = ctx.ui.theme;
@@ -217,7 +221,7 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 			`**Base**: ${task.baseBranch} @ ${task.baseCommit.slice(0, 8)} · created ${task.createdAt.slice(0, 16).replace("T", " ")}`,
 			...(task.summary ? [`**Outcome**: ${task.summary}`] : []),
 			"",
-			"**Legend**: ✓ go · ✗ no-go · ⚠ stale (artifact changed) · ○ pending · … reviewing",
+			"**Legend**: ✓ go · ✗ no-go · ⊘ overruled by clerk · ⚠ stale (artifact changed) · ○ pending · … reviewing",
 			`**Task spend**: $${spend.costUsd.toFixed(4)} · ${spend.tokens.total.toLocaleString()} tokens · ${spend.runs} runs (Owner ${spend.byKind.owner.runs}, workers ${spend.byKind.worker.runs}, verifiers ${spend.byKind.verifier.runs})`,
 			"",
 			"### Requirements",
@@ -233,6 +237,19 @@ export function createStatusUI(pi: ExtensionAPI, liveChildren: Map<string, strin
 					]
 				: []),
 			"",
+			(() => {
+				const clerkState = store.readClerk();
+				if (clerkState.items.length === 0) return "";
+				const open = clerkState.items.filter((item) => item.status === "open");
+				const resolved = clerkState.items.filter((item) => item.status === "resolved").length;
+				const overruledN = clerkState.items.filter((item) => item.status === "overruled").length;
+				return [
+					`### Clerk ledger — ${open.length} open · ${resolved} resolved · ${overruledN} overruled`,
+					"",
+					...(open.length ? open.map((item) => `- **${item.id}** (${item.gate}): ${item.title}`) : ["All items closed."]),
+					"",
+				].join("\n");
+			})(),
 			gateSection(design),
 			"",
 			gateSection(impl),

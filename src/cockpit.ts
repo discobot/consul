@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { LaunchStore, type StatusGate, totalSpend } from "./state.ts";
 
-export type BoardState = "GO" | "NO-GO" | "stale" | "pending" | "reviewing";
+export type BoardState = "GO" | "NO-GO" | "overruled" | "stale" | "pending" | "reviewing";
 
 export interface BoardVerifier {
 	name: string;
@@ -56,7 +56,7 @@ function stateName(value: unknown): BoardState {
 	const normalized = String(value ?? "pending").toLowerCase();
 	if (normalized === "go") return "GO";
 	if (normalized === "no-go" || normalized === "nogo") return "NO-GO";
-	if (normalized === "stale" || normalized === "reviewing") return normalized;
+	if (normalized === "stale" || normalized === "reviewing" || normalized === "overruled") return normalized;
 	return "pending";
 }
 
@@ -181,6 +181,7 @@ const BORDER: PaletteColor = "dim";
 const STATE_STYLE: Record<BoardState, { icon: string; color: PaletteColor }> = {
 	GO: { icon: "✓", color: "success" },
 	"NO-GO": { icon: "✗", color: "error" },
+	overruled: { icon: "⊘", color: "muted" },
 	stale: { icon: "⚠", color: "warning" },
 	pending: { icon: "○", color: "muted" },
 	reviewing: { icon: "◈", color: "accent" },
@@ -304,7 +305,7 @@ export function buildBoardNodes(snapshot: BoardSnapshot, frame = 0): BoardNode[]
 			const staleCount = snapshot.blockers.filter((blocker) => blocker.stale).length;
 			nodes.push({
 				id: "blockers",
-				summary: [span("Blockers", "error", true), span(` · ${snapshot.blockers.length}${staleCount ? ` (${staleCount} from a stale round)` : ""}`, "muted")],
+				summary: [span("Items", "error", true), span(` · ${snapshot.blockers.length}${staleCount ? ` (${staleCount} from a stale round)` : ""}`, "muted")],
 				children: snapshot.blockers.map((blocker, index) => ({
 					id: `blocker:${index}:${blocker.text.slice(0, 32)}`,
 					summary: [

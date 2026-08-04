@@ -72,7 +72,7 @@ export interface Verdict {
 	fingerprint?: string;
 }
 
-export type VerifierGateState = "go" | "no-go" | "stale" | "pending";
+export type VerifierGateState = "go" | "no-go" | "overruled" | "stale" | "pending";
 
 export interface GateReport {
 	gate: Gate;
@@ -96,7 +96,7 @@ export interface ReviewActivity {
 	implementation?: boolean;
 }
 
-export type SpendKind = "owner" | "worker" | "verifier";
+export type SpendKind = "owner" | "worker" | "verifier" | "clerk";
 export type SpendStatus = "ok" | "failed" | "aborted";
 
 export interface TokenUsage {
@@ -129,7 +129,7 @@ export interface SpendTotals extends SpendBreakdown {
 
 export interface ChildActivity {
 	id: string;
-	kind: "worker" | "verifier";
+	kind: "worker" | "verifier" | "clerk";
 	name: string;
 	status: "running" | "terminating";
 	startedAt: string;
@@ -183,7 +183,7 @@ function emptyBreakdown(): SpendBreakdown {
 export function totalSpend(entries: readonly SpendEntry[]): SpendTotals {
 	const totals: SpendTotals = {
 		...emptyBreakdown(),
-		byKind: { owner: emptyBreakdown(), worker: emptyBreakdown(), verifier: emptyBreakdown() },
+		byKind: { owner: emptyBreakdown(), worker: emptyBreakdown(), verifier: emptyBreakdown(), clerk: emptyBreakdown() },
 	};
 	for (const entry of entries) {
 		const buckets = [totals, totals.byKind[entry.kind]];
@@ -221,6 +221,7 @@ export interface LaunchConfig {
 	model?: string;
 	verifierModel?: string;
 	workerModel?: string;
+	clerkModel?: string;
 	/** Persistent model overrides keyed by verifier name. */
 	verifierModels?: Record<string, string>;
 	/** Max children running at once. */
@@ -230,6 +231,22 @@ export interface LaunchConfig {
 	/** Minutes without a parsed child JSONL event before termination. */
 	inactivityMinutes?: number;
 }
+
+
+/** The Clerk's persistent arbitration ledger — the stateful counterpart to stateless judges. */
+export interface ClerkItem {
+	id: string;
+	gate: Gate;
+	title: string;
+	detail: string;
+	status: "open" | "resolved" | "overruled";
+	sources: { verifier: string; at: string; hash: string }[];
+	ruling?: string;
+	updatedAt: string;
+}
+export interface ClerkOverrule { gate: Gate; verifier: string; hash: string; reason: string; at: string }
+export interface ClerkState { v: 1; items: ClerkItem[]; overrules: ClerkOverrule[]; updatedAt?: string }
+export const emptyClerkState = (): ClerkState => ({ v: 1, items: [], overrules: [] });
 
 async function git(cwd: string, args: string[]): Promise<string> {
 	const { stdout } = await execFileP("git", args, { cwd, maxBuffer: 32 * 1024 * 1024 });
@@ -320,7 +337,7 @@ export class LaunchStore {
 		}
 		const config = value as Record<string, unknown>;
 		const validModel = (model: unknown): model is string => typeof model === "string" && /^[^/\s]+\/[^/\s]+$/.test(model);
-		for (const key of ["model", "verifierModel", "workerModel"] as const) {
+		for (const key of ["model", "verifierModel", "workerModel", "clerkModel"] as const) {
 			if (config[key] !== undefined && !validModel(config[key])) {
 				throw new Error(`Invalid council config at ${configPath}: ${key} must be provider/model.`);
 			}
@@ -651,7 +668,7 @@ export class LaunchStore {
 	private validateSpendEntry(entry: SpendEntry, source: string): void {
 		const tokenKeys: (keyof TokenUsage)[] = ["input", "output", "cacheRead", "cacheWrite"];
 		if (
-			!entry || !["owner", "worker", "verifier"].includes(entry.kind) ||
+			!entry || !["owner", "worker", "verifier", "clerk"].includes(entry.kind) ||
 			typeof entry.at !== "string" || typeof entry.name !== "string" || !entry.name.trim() ||
 			typeof entry.model !== "string" || !entry.model.trim() ||
 			!["ok", "failed", "aborted"].includes(entry.status) || !entry.tokens ||
@@ -709,12 +726,30 @@ export class LaunchStore {
 	}
 
 	/** Truthful per-verifier gate state, recomputed against current content. */
+	readClerk(): ClerkState {
+		const task = this.latest();
+		if (!task) return emptyClerkState();
+		try {
+			const raw = JSON.parse(fs.readFileSync(path.join(this.taskDir(task.id), "clerk.json"), "utf-8"));
+			if (raw?.v !== 1 || !Array.isArray(raw.items) || !Array.isArray(raw.overrules)) return emptyClerkState();
+			return raw as ClerkState;
+		} catch {
+			return emptyClerkState();
+		}
+	}
+
+	writeClerk(state: ClerkState): void {
+		const task = this.mustCurrent();
+		fs.writeFileSync(path.join(this.taskDir(task.id), "clerk.json"), JSON.stringify(state, null, 1));
+	}
+
 	async gateReport(
 		gate: Gate,
 		applicableVerifiers: string[],
 		expectedFingerprints?: ReadonlyMap<string, string> | Readonly<Record<string, string>>,
 	): Promise<GateReport> {
 		const hash = await this.gateHash(gate);
+		const clerk = this.readClerk();
 		const latest = new Map<string, Verdict>();
 		for (const v of this.loadVerdicts()) {
 			if (v.gate === gate) latest.set(v.verifier, v);
@@ -727,6 +762,7 @@ export class LaunchStore {
 			let state: VerifierGateState;
 			if (!verdict) state = "pending";
 			else if (verdict.hash !== hash || (fingerprint !== undefined && verdict.fingerprint !== fingerprint)) state = "stale";
+			else if (verdict.verdict === "no-go" && clerk.overrules.some((o) => o.gate === gate && o.verifier === name && o.hash === verdict.hash)) state = "overruled";
 			else state = verdict.verdict;
 			return { name, state, verdict };
 		});
@@ -736,7 +772,7 @@ export class LaunchStore {
 			hash,
 			verifiers,
 			holds:
-				pendingInputIds.length === 0 && verifiers.length > 0 && verifiers.every((verifier) => verifier.state === "go"),
+				pendingInputIds.length === 0 && verifiers.length > 0 && verifiers.every((verifier) => verifier.state === "go" || verifier.state === "overruled"),
 			...(pendingInputIds.length ? { pendingInputIds } : {}),
 		};
 	}

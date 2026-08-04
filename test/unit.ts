@@ -14,6 +14,7 @@ import { test } from "node:test";
 import { LaunchStore, type Verdict } from "../src/state.ts";
 import { discoverVerifiers, parseFrontmatter, parseVerdict, verifiersForGate } from "../src/verifiers.ts";
 import "./children.test.ts";
+import "./clerk.test.ts";
 import "./cockpit.test.ts";
 import "./presentation.test.ts";
 import "./state.test.ts";
@@ -115,6 +116,23 @@ test("implementation hash tracks committed changes and runtime state stays neutr
 	const report = await store.gateReport("implementation", ["a"]);
 	assert.equal(report.holds, false);
 	assert.equal(report.verifiers[0].state, "no-go");
+});
+
+test("clerk overrule lets a gate hold over a hostile holdout", async () => {
+	const store = new LaunchStore(makeRepo());
+	await store.createTask("task", ["r"]);
+	store.writeDesign("# D");
+	const hash = await store.designHash();
+	goVerdict(store, "design", "a", hash);
+	store.appendVerdict({ gate: "design", verifier: "b", verdict: "no-go", comments: ["x"], hash, at: "t1" });
+	assert.equal((await store.gateReport("design", ["a", "b"])).holds, false);
+	store.writeClerk({ v: 1, items: [], overrules: [{ gate: "design", verifier: "b", hash, reason: "re-litigation of a recorded decision", at: "t2" }] });
+	const report = await store.gateReport("design", ["a", "b"]);
+	assert.equal(report.verifiers.find((v) => v.name === "b")!.state, "overruled");
+	assert.equal(report.holds, true, "overruled no-go no longer blocks");
+	// staleness still wins: new hash invalidates both the verdict and the overrule
+	store.writeDesign("# D2");
+	assert.equal((await store.gateReport("design", ["a", "b"])).holds, false);
 });
 
 test("latest verdict per (gate, verifier) wins", async () => {
