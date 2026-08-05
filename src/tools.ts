@@ -117,7 +117,7 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 		description:
 			"Finalize the captured council task with the verbatim statement plus derived requirements. One task at a time; the statement is immutable afterwards.",
 		parameters: Type.Object({
-			statement: Type.String({ description: "The user's task statement, verbatim" }),
+			statement: Type.Optional(Type.String({ description: "The user's task statement. Omit it: the captured first message is used verbatim. Provide only when nothing was captured." })),
 			requirements: Type.Array(Type.String(), {
 				description: "Complete list of checkable requirements derived from the statement",
 			}),
@@ -125,11 +125,15 @@ export function registerTools(pi: ExtensionAPI, live: LiveActivity): void {
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			if (params.requirements.length === 0) throw new Error("Derive at least one requirement.");
 			const captured = live.initialInput?.(ctx.cwd);
-			if (captured && params.statement !== captured.text) {
-				throw new Error("The task statement must exactly match the user's captured first message.");
+			// The captured message IS the statement; echoing kilobytes through a tool call
+			// only manufactures encoding failures. A provided statement must still match.
+			if (captured && params.statement !== undefined && params.statement !== captured.text) {
+				throw new Error("The task statement must exactly match the user's captured first message — or simply omit `statement`.");
 			}
+			const statement = captured?.text ?? params.statement;
+			if (!statement) throw new Error("No captured task message and no statement provided.");
 			const store = storeFor(ctx.cwd);
-			const task = await store.createTask(params.statement, params.requirements);
+			const task = await store.createTask(statement, params.requirements);
 			if (captured?.images?.length) store.setTaskAttachments(persistImages(store, task.id, "task", captured.images));
 			live.clearInitialInput?.(ctx.cwd);
 			live.onChange(ctx);
