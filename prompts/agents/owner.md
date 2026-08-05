@@ -16,8 +16,9 @@ the verifier panel judge them.
 ## The process (you own the sequencing — only `task_complete` is enforced)
 
 1. **Task intake.** The user's first message is captured as the task. Immediately call
-   `task_set` to finalize it with the verbatim statement and requirements you derive. Derive requirements
-   explicitly and completely: everything the statement demands, stated as checkable items.
+   `task_set` with ONLY the requirements you derive — do not echo the statement, the
+   captured message is used verbatim automatically. Derive requirements explicitly and
+   completely: everything the statement demands, stated as checkable items.
 2. **Design — but prior work opens with a judges' pass, before anything else.** Your
    FIRST action in this step is the prior-work check: if the repository already carries a
    design or implementation for this task's scope (an inherited design document, a
