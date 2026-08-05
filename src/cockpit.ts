@@ -707,8 +707,20 @@ export class OwnerSupervisor {
 	}
 
 	append(text: string): Promise<string> {
-		if (!this.ready) return new Promise((resolve) => { this.queuedAppends.push({ text, resolve }); this.changed(`${this.queuedAppends.length} requirement(s) queued while Owner reconnects`); });
-		return this.promptAppend(text);
+		// Durable first: the pending input lands on disk immediately, so the append works
+		// even when the Owner is dead, reconnecting, or supervised by someone else — the
+		// Owner records it from the task snapshot on its next turn. The RPC prompt is
+		// only a nudge to pick it up sooner.
+		try {
+			const pending = new LaunchStore(this.cwd).addPendingInputWithImages(text, []);
+			if (!this.ready) { this.changed(`Requirement ${pending.id} queued on disk; Owner records it next turn`); return Promise.resolve(`Requirement ${pending.id} queued on disk`); }
+			return this.send("prompt", { message: `[council] Pending input ${pending.id} is queued on disk — record it with task_requirements_add and propagate.`, streamingBehavior: "followUp" })
+				.then((ok) => ok ? `Requirement ${pending.id} queued; Owner nudged` : `Requirement ${pending.id} queued on disk; nudge failed — Owner records it next turn`);
+		} catch (error) {
+			if (!this.ready) return new Promise((resolve) => { this.queuedAppends.push({ text, resolve }); this.changed(`${this.queuedAppends.length} requirement(s) queued while Owner reconnects`); });
+			void error;
+			return this.promptAppend(text);
+		}
 	}
 
 	private promptAppend(text: string): Promise<string> {
